@@ -19,7 +19,23 @@ export default defineConfig({
 				runes: ({ filename }) =>
 					filename.split(/[/\\]/).includes('node_modules') ? undefined : true
 			},
-			adapter
+			adapter,
+			csrf: {
+				// /token (OAuth code exchange) has to accept cross-origin
+				// application/x-www-form-urlencoded POSTs from whatever server
+				// claude.ai calls it from — per the OAuth spec that's the
+				// required content-type for token requests, and a
+				// server-to-server call typically carries no Origin header at
+				// all, so no trustedOrigins allowlist can admit it; only
+				// turning the check off entirely does. This is safe here: /token
+				// is stateless (auth is the code+verifier in the body, not a
+				// cookie) so CSRF doesn't apply to it, and the one route that
+				// actually acts on a cookie-authenticated session for another
+				// party's benefit (/authorize's approve action) is still
+				// protected by the session cookie's SameSite=Lax attribute,
+				// which this setting doesn't affect.
+				checkOrigin: false
+			}
 		}),
 		SvelteKitPWA({
 			registerType: 'autoUpdate',
