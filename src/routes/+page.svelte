@@ -31,16 +31,28 @@
 	<header class="sticky top-0 z-10 -mx-4 px-4 pt-6 pb-3" style="background: var(--color-bg);">
 		<div class="mb-4 flex items-center justify-between">
 			<h1 class="text-xl font-semibold tracking-tight">Notes</h1>
-			<a
-				href="/note/new"
-				aria-label="New note"
-				class="flex h-9 w-9 items-center justify-center rounded-full"
-				style="background: var(--color-accent); color: var(--color-accent-ink);"
-			>
-				<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"
-					><path d="M12 5v14M5 12h14" /></svg
+			<div class="flex items-center gap-2">
+				<a
+					href="/account"
+					aria-label="Account"
+					class="flex h-9 w-9 items-center justify-center rounded-full"
+					style="color: var(--color-ink-muted);"
 				>
-			</a>
+					<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+						><circle cx="12" cy="8" r="4" /><path d="M4 21c0-4 4-6 8-6s8 2 8 6" /></svg
+					>
+				</a>
+				<a
+					href="/note/new"
+					aria-label="New note"
+					class="flex h-9 w-9 items-center justify-center rounded-full"
+					style="background: var(--color-accent); color: var(--color-accent-ink);"
+				>
+					<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"
+						><path d="M12 5v14M5 12h14" /></svg
+					>
+				</a>
+			</div>
 		</div>
 		<div class="relative">
 			<svg
