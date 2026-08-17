@@ -1,24 +1,24 @@
 @import 'tailwindcss';
 
 @theme {
-	--color-bg: #faf9f7;
+	--color-bg: #f4efe6;
 	--color-surface: #ffffff;
-	--color-surface-2: #f2f1ec;
-	--color-border: #e8e5df;
-	--color-ink: #1c1c1a;
-	--color-ink-muted: #78766f;
-	--color-ink-faint: #a6a49c;
-	--color-accent: #2c4bdb;
-	--color-accent-soft: #eaeeff;
+	--color-surface-2: #ece4d6;
+	--color-border: #e6ddcc;
+	--color-ink: #211d17;
+	--color-ink-muted: #8a8072;
+	--color-ink-faint: #b3a996;
+	--color-accent: #de6240;
+	--color-accent-soft: #fce3d9;
 	--color-accent-ink: #ffffff;
 	--color-danger: #c23b34;
 	--color-success: #1f7a52;
 	--color-success-soft: #e3f3ea;
 
-	--radius-sm: 0.625rem;
-	--radius-md: 1rem;
-	--radius-lg: 1.5rem;
-	--radius-xl: 1.75rem;
+	--radius-sm: 0.75rem;
+	--radius-md: 1.25rem;
+	--radius-lg: 1.75rem;
+	--radius-xl: 2.25rem;
 
 	--font-sans:
 		-apple-system, BlinkMacSystemFont, 'Inter', 'SF Pro Text', system-ui, sans-serif;
@@ -27,16 +27,16 @@
 
 @media (prefers-color-scheme: dark) {
 	:root {
-		--color-bg: #111110;
-		--color-surface: #191917;
-		--color-surface-2: #212120;
-		--color-border: #2c2c2a;
-		--color-ink: #f3f2ee;
-		--color-ink-muted: #9c9a92;
-		--color-ink-faint: #67655e;
-		--color-accent: #7c93ff;
-		--color-accent-soft: #23294a;
-		--color-accent-ink: #0f1117;
+		--color-bg: #17140f;
+		--color-surface: #211d17;
+		--color-surface-2: #2a251d;
+		--color-border: #362f24;
+		--color-ink: #f3ede0;
+		--color-ink-muted: #a89c88;
+		--color-ink-faint: #6b6152;
+		--color-accent: #ec7a54;
+		--color-accent-soft: #3a2620;
+		--color-accent-ink: #17140f;
 		--color-danger: #e0685f;
 		--color-success: #5fd8a0;
 		--color-success-soft: #163828;

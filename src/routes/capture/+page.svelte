@@ -180,18 +180,21 @@
 			<div class="mx-auto mb-2 h-1.25 w-9 shrink-0 rounded-full" style="background: var(--color-border);"
 			></div>
 
-			<div class="flex shrink-0 items-center justify-between pb-1">
-				<span class="text-xs font-medium" style="color: var(--color-ink-faint);">Save to NoteMCP</span>
+			<div class="relative flex shrink-0 items-center justify-center pt-1 pb-3">
 				<button
 					onclick={leave}
 					aria-label="Close"
-					class="flex h-8 w-8 items-center justify-center rounded-full"
-					style="color: var(--color-ink-muted);"
+					class="absolute left-0 flex h-10 w-10 items-center justify-center rounded-[var(--radius-md)]"
+					style="background: var(--color-surface); color: var(--color-ink); box-shadow: 0 1px 2px rgba(0,0,0,0.06);"
 				>
 					<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"
 						><path d="M18 6 6 18M6 6l12 12" /></svg
 					>
 				</button>
+				<div class="text-center">
+					<p class="text-base font-bold">Quick capture</p>
+					<p class="text-xs" style="color: var(--color-ink-faint);">Shared to NoteMCP</p>
+				</div>
 			</div>
 
 			<div class="min-h-0 flex-1 overflow-y-auto pb-1">
@@ -208,6 +211,19 @@
 						class="mt-1 mb-4 rounded-[var(--radius-lg)] p-4"
 						style="background: var(--color-surface); border: 1px solid var(--color-border);"
 					>
+						{#if !sharedImageDataUrl}
+							<div
+								class="mb-3 flex h-10 w-10 items-center justify-center rounded-[var(--radius-sm)]"
+								style="background: var(--color-accent-soft); color: var(--color-accent);"
+							>
+								<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"
+									><path d="M7 17 17 7M8 7h9v9" /></svg
+								>
+							</div>
+							<p class="mb-3 text-xs" style="color: var(--color-ink-faint);">
+								{sourceUrl ? 'Shared link' : 'Text shared from another app'}
+							</p>
+						{/if}
 						{#if sharedImageDataUrl}
 							<img
 								src={sharedImageDataUrl}
@@ -238,7 +254,14 @@
 										{hostname(sourceUrl)}
 									</span>
 								{/if}
-								<p class="line-clamp-3 text-[0.95rem] leading-snug font-medium">{displayTitle}</p>
+								<p
+									class="line-clamp-3 leading-snug"
+									style={sourceUrl || sharedImageDataUrl
+										? 'font-size: 0.95rem; font-weight: 500;'
+										: "font-family: Georgia, 'Times New Roman', serif; font-size: 1.5rem; font-weight: 400;"}
+								>
+									{displayTitle}
+								</p>
 								{#if displaySubtext}
 									<p class="mt-1 line-clamp-2 text-sm" style="color: var(--color-ink-muted);">{displaySubtext}</p>
 								{:else if previewLoading}
@@ -262,36 +285,38 @@
 			</div>
 
 			<div class="shrink-0 pb-4">
+				<p class="mb-2 text-xs font-medium tracking-wide uppercase" style="color: var(--color-ink-faint);">
+					Save with a tag
+				</p>
 				<div class="grid grid-cols-3 gap-2.5">
 					{#each QUICK_TAGS as tag (tag)}
 						{@const done = submittedKey === tag}
 						<button
 							onclick={() => saveWith([tag], tag)}
 							disabled={submitted}
-							class="flex aspect-square flex-col items-center justify-center gap-1 rounded-[var(--radius-lg)] text-sm font-medium disabled:opacity-100"
+							class="flex aspect-square flex-col items-start justify-between rounded-[var(--radius-lg)] p-3 text-left text-sm font-semibold disabled:opacity-100"
 							style={done
 								? 'background: var(--color-success-soft); color: var(--color-success);'
-								: `background: var(--color-accent-soft); color: var(--color-accent); ${submitted ? 'opacity: 0.4;' : ''}`}
+								: `background: var(--color-surface); border: 1px solid var(--color-border); color: var(--color-ink); ${submitted ? 'opacity: 0.4;' : ''}`}
 						>
 							{#if done}
-								<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"
+								<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"
 									><path d="M20 6 9 17l-5-5" /></svg
 								>
 							{:else}
-								#{tag}
+								<span class="text-lg font-bold" style="color: var(--color-accent);">#</span>
+								<span>{tag}</span>
 							{/if}
 						</button>
 					{/each}
 					<button
 						onclick={openInEditor}
 						disabled={submitted}
-						class="flex aspect-square flex-col items-center justify-center gap-1 rounded-[var(--radius-lg)] text-sm font-medium"
-						style="background: var(--color-surface); border: 1px solid var(--color-border); color: var(--color-ink-muted); {submitted
-							? 'opacity: 0.4;'
-							: ''}"
+						class="flex aspect-square flex-col items-start justify-between rounded-[var(--radius-lg)] p-3 text-left text-sm font-semibold"
+						style="background: var(--color-ink); color: var(--color-bg); {submitted ? 'opacity: 0.4;' : ''}"
 					>
-						<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
-							><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><path d="M15 3h6v6" /><path d="M10 14 21 3" /></svg
+						<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"
+							><path d="M7 17 17 7M8 7h9v9" /></svg
 						>
 						Open
 					</button>
@@ -300,7 +325,7 @@
 				<button
 					onclick={() => saveWith([], 'inbox')}
 					disabled={submitted}
-					class="mt-3 flex w-full items-center justify-center gap-2 rounded-[var(--radius-md)] py-4 text-base font-medium"
+					class="mt-3 flex w-full items-center justify-center gap-1.5 rounded-[var(--radius-md)] py-4 text-base font-semibold"
 					style={submittedKey === 'inbox'
 						? 'background: var(--color-success-soft); color: var(--color-success);'
 						: `background: var(--color-accent); color: var(--color-accent-ink); ${submitted ? 'opacity: 0.4;' : ''}`}
@@ -311,7 +336,7 @@
 						>
 						Saved
 					{:else}
-						Just save
+						Just save<span class="text-sm font-normal opacity-80">to Inbox</span>
 					{/if}
 				</button>
 			</div>
