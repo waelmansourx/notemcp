@@ -4,6 +4,7 @@
 	import { onMount } from 'svelte';
 	import { invalidate } from '$app/navigation';
 	import { browser } from '$app/environment';
+	import { flushOutbox } from '$lib/outbox';
 
 	let { children, data } = $props();
 
@@ -21,6 +22,10 @@
 				invalidate('supabase:auth');
 			}
 		});
+
+		// Retry any capture that queued locally but never made it to the
+		// server (e.g. offline at share time).
+		flushOutbox();
 
 		return () => subscription.unsubscribe();
 	});

@@ -3,6 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { hostname } from '$lib/dates';
 	import { QUICK_TAGS } from '$lib/types';
+	import { queueNote, removeFromOutbox, syncEntry, type OutboxEntry } from '$lib/outbox';
 	import { fly, fade } from 'svelte/transition';
 	import { quintOut } from 'svelte/easing';
 
@@ -20,40 +21,47 @@
 
 	let caption = $state('');
 	let saving = $state(false);
-	let savedNoteId = $state<string | null>(null);
 	let showToast = $state(false);
 	let toastLabel = $state('');
 	let dismissed = $state(false);
+	let pending = $state<{ entry: OutboxEntry; noteId: string | null } | null>(null);
 	let navTimer: ReturnType<typeof setTimeout>;
 
-	function dismiss() {
+	// Android launches a share-target navigation as a fresh activity with no
+	// prior history, which is precisely the condition browsers require to
+	// honor a script-initiated window.close() — so this has a real shot at
+	// dropping the user straight back into the app they shared from. If it's
+	// not permitted (e.g. testing in a normal browser tab), fall back home.
+	function leave() {
 		dismissed = true;
-		setTimeout(() => goto('/'), 180);
+		setTimeout(() => {
+			window.close();
+			setTimeout(() => goto('/'), 250);
+		}, 180);
 	}
 
-	async function saveWith(tagNames: string[], label: string) {
+	function saveWith(tagNames: string[], label: string) {
 		if (saving) return;
 		saving = true;
-		try {
-			const res = await fetch('/api/notes', {
-				method: 'POST',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({
-					title: previewTitle,
-					content_markdown: caption,
-					source_url: sourceUrl,
-					source_type: sourceUrl ? 'share' : null,
-					tagNames
-				})
-			});
-			const note = await res.json();
-			savedNoteId = note.id;
-			toastLabel = label;
-			showToast = true;
-			navTimer = setTimeout(dismiss, 1400);
-		} finally {
-			saving = false;
-		}
+
+		const entry = queueNote({
+			title: previewTitle,
+			content_markdown: caption,
+			source_url: sourceUrl,
+			source_type: sourceUrl ? 'share' : null,
+			tagNames
+		});
+		pending = { entry, noteId: null };
+
+		toastLabel = label;
+		showToast = true;
+		navTimer = setTimeout(leave, 1200);
+
+		syncEntry(entry, (id) => {
+			if (pending?.entry.client_id === entry.client_id) pending.noteId = id;
+		});
+
+		saving = false;
 	}
 
 	function openInEditor() {
@@ -67,11 +75,12 @@
 	async function undo() {
 		clearTimeout(navTimer);
 		showToast = false;
-		if (savedNoteId) {
-			const id = savedNoteId;
-			savedNoteId = null;
-			await fetch(`/api/notes/${id}?hard=1`, { method: 'DELETE' });
+		if (!pending) return;
+		removeFromOutbox(pending.entry.client_id);
+		if (pending.noteId) {
+			await fetch(`/api/notes/${pending.noteId}?hard=1`, { method: 'DELETE', keepalive: true });
 		}
+		pending = null;
 	}
 </script>
 
@@ -84,7 +93,7 @@
 		class="fixed inset-0 z-40 flex flex-col justify-end"
 		style="background: rgba(10, 10, 8, 0.5);"
 		transition:fade={{ duration: 200 }}
-		onclick={dismiss}
+		onclick={leave}
 		role="presentation"
 	>
 		<div
@@ -100,7 +109,7 @@
 			<div class="flex shrink-0 items-center justify-between pb-1">
 				<span class="text-xs font-medium" style="color: var(--color-ink-faint);">Save to NoteMCP</span>
 				<button
-					onclick={dismiss}
+					onclick={leave}
 					aria-label="Close"
 					class="flex h-8 w-8 items-center justify-center rounded-full"
 					style="color: var(--color-ink-muted);"
