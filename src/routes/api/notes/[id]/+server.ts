@@ -15,7 +15,17 @@ export const PATCH: RequestHandler = async ({ request, params, locals: { supabas
 	const body = await request.json();
 	const updates: Record<string, unknown> = {};
 
-	for (const key of ['title', 'content_markdown', 'source_url', 'source_type', 'pinned', 'archived']) {
+	for (const key of [
+		'title',
+		'content_markdown',
+		'source_url',
+		'source_type',
+		'source_title',
+		'source_description',
+		'source_image',
+		'pinned',
+		'archived'
+	]) {
 		if (key in body) updates[key] = body[key];
 	}
 

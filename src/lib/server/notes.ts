@@ -55,6 +55,9 @@ export async function createNote(
 		content_markdown?: string;
 		source_url?: string | null;
 		source_type?: string | null;
+		source_title?: string | null;
+		source_description?: string | null;
+		source_image?: string | null;
 		pinned?: boolean;
 		tagNames?: string[];
 	}
@@ -67,6 +70,9 @@ export async function createNote(
 			content_markdown: input.content_markdown ?? '',
 			source_url: input.source_url ?? null,
 			source_type: input.source_type ?? null,
+			source_title: input.source_title ?? null,
+			source_description: input.source_description ?? null,
+			source_image: input.source_image ?? null,
 			pinned: input.pinned ?? false
 		})
 		.select('*')

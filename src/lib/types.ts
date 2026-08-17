@@ -10,6 +10,9 @@ export interface Note {
 	content_markdown: string;
 	source_url: string | null;
 	source_type: string | null;
+	source_title: string | null;
+	source_description: string | null;
+	source_image: string | null;
 	folder_id: string | null;
 	pinned: boolean;
 	archived: boolean;

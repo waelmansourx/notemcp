@@ -9,13 +9,23 @@
 		prefill = null
 	}: {
 		existingNote?: Note | null;
-		prefill?: { title?: string; content_markdown?: string; source_url?: string | null } | null;
+		prefill?: {
+			title?: string;
+			content_markdown?: string;
+			source_url?: string | null;
+			source_title?: string | null;
+			source_description?: string | null;
+			source_image?: string | null;
+		} | null;
 	} = $props();
 
 	let id = $state(existingNote?.id ?? null);
 	let title = $state(existingNote?.title ?? prefill?.title ?? '');
 	let content = $state(existingNote?.content_markdown ?? prefill?.content_markdown ?? '');
 	let sourceUrl = $state(existingNote?.source_url ?? prefill?.source_url ?? null);
+	let linkTitle = $state(existingNote?.source_title ?? prefill?.source_title ?? null);
+	let linkDescription = $state(existingNote?.source_description ?? prefill?.source_description ?? null);
+	let linkImage = $state(existingNote?.source_image ?? prefill?.source_image ?? null);
 	let pinned = $state(existingNote?.pinned ?? false);
 	let tags = $state<string[]>(existingNote?.tags.map((t) => t.name) ?? []);
 	let tagInput = $state('');
@@ -50,6 +60,9 @@
 					content_markdown: content,
 					source_url: sourceUrl,
 					source_type: sourceUrl ? 'share' : 'manual',
+					source_title: linkTitle,
+					source_description: linkDescription,
+					source_image: linkImage,
 					pinned,
 					tagNames: tags
 				})
@@ -161,6 +174,35 @@
 				><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><path d="M15 3h6v6" /><path d="M10 14 21 3" /></svg
 			>
 			{hostname(sourceUrl)}
+		</a>
+	{/if}
+
+	{#if linkImage || linkTitle || linkDescription}
+		<a
+			href={sourceUrl ?? undefined}
+			target={sourceUrl ? '_blank' : undefined}
+			rel={sourceUrl ? 'noopener noreferrer' : undefined}
+			class="mb-4 flex gap-3 rounded-[var(--radius-lg)] p-3"
+			style="background: var(--color-surface-2);"
+		>
+			{#if linkImage}
+				<img
+					src={linkImage}
+					alt=""
+					class="h-16 w-16 shrink-0 rounded-[var(--radius-sm)] object-cover"
+					style="background: var(--color-surface);"
+				/>
+			{/if}
+			<div class="min-w-0 flex-1">
+				{#if linkTitle}
+					<p class="truncate text-sm font-medium" style="color: var(--color-ink);">{linkTitle}</p>
+				{/if}
+				{#if linkDescription}
+					<p class="mt-0.5 line-clamp-2 text-xs leading-snug" style="color: var(--color-ink-muted);">
+						{linkDescription}
+					</p>
+				{/if}
+			</div>
 		</a>
 	{/if}
 

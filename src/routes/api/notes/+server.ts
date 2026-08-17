@@ -12,6 +12,9 @@ export const POST: RequestHandler = async ({ request, locals: { supabase, user }
 		content_markdown: body.content_markdown,
 		source_url: body.source_url,
 		source_type: body.source_type,
+		source_title: body.source_title,
+		source_description: body.source_description,
+		source_image: body.source_image,
 		pinned: body.pinned,
 		tagNames: body.tagNames
 	});

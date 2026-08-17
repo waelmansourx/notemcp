@@ -25,6 +25,9 @@ export default defineConfig({
 			registerType: 'autoUpdate',
 			injectRegister: false,
 			devOptions: { enabled: false },
+			strategies: 'injectManifest',
+			srcDir: 'src',
+			filename: 'service-worker.ts',
 			manifest: {
 				name: 'NoteMCP',
 				short_name: 'NoteMCP',
@@ -50,18 +53,24 @@ export default defineConfig({
 						purpose: 'maskable'
 					}
 				],
+				// A share_target can only declare one method, and file shares
+				// require POST + multipart, so every share (text, link, or
+				// image) now goes through here. The service worker intercepts
+				// the POST (see src/service-worker.ts), stashes any file in
+				// Cache Storage, and redirects to a plain GET /capture.
 				share_target: {
 					action: '/capture',
-					method: 'GET',
+					method: 'POST',
+					enctype: 'multipart/form-data',
 					params: {
 						title: 'title',
 						text: 'text',
-						url: 'url'
+						url: 'url',
+						files: [{ name: 'images', accept: ['image/*'] }]
 					}
 				}
 			} as any,
-			workbox: {
-				navigateFallback: null,
+			injectManifest: {
 				globPatterns: ['**/*.{js,css,html,png,svg,ico,webmanifest}']
 			}
 		})

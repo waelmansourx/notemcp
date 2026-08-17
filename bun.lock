@@ -10,6 +10,7 @@
         "highlight.js": "^11.12.0",
         "marked": "^18.0.9",
         "marked-highlight": "^2.2.4",
+        "workbox-precaching": "^7.4.1",
       },
       "devDependencies": {
         "@sveltejs/adapter-auto": "^7.0.1",

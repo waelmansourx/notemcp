@@ -4,21 +4,23 @@
 	import { onMount } from 'svelte';
 	import { hostname } from '$lib/dates';
 	import { QUICK_TAGS } from '$lib/types';
-	import { queueNote, removeFromOutbox, syncEntry, type OutboxEntry } from '$lib/outbox';
+	import { queueNote, syncEntry, syncEntryNow } from '$lib/outbox';
 	import { fly, fade } from 'svelte/transition';
 	import { quintOut } from 'svelte/easing';
+
+	const SHARE_CACHE = 'notemcp-share-v1';
+	const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
 
 	const params = page.url.searchParams;
 	const rawTitle = params.get('title') ?? '';
 	const rawText = params.get('text') ?? '';
 	const rawUrl = params.get('url') ?? '';
+	const sharedId = params.get('shared');
 
 	const urlRegex = /https?:\/\/\S+/i;
 	const foundUrl = rawUrl || rawText.match(urlRegex)?.[0] || rawTitle.match(urlRegex)?.[0] || '';
 	const sourceUrl = foundUrl || null;
 	const leftoverText = rawText.replace(urlRegex, '').trim();
-	const fallbackTitle = rawTitle || leftoverText || (sourceUrl ? hostname(sourceUrl) : 'Shared item');
-	const fallbackSubtext = leftoverText && leftoverText !== fallbackTitle ? leftoverText : '';
 
 	// Best-effort link preview — fetched in the background and never blocks
 	// saving. If it resolves before the user taps something, it replaces the
@@ -28,89 +30,131 @@
 	let fetchedImage = $state<string | null>(null);
 	let previewLoading = $state(false);
 
+	// A shared screenshot/photo, pulled out of Cache Storage where the
+	// service worker stashed it (see src/service-worker.ts).
+	let sharedImageDataUrl = $state<string | null>(null);
+	let sharedImageTooLarge = $state(false);
+	let sharedImageLoading = $state(!!sharedId);
+
+	let fallbackTitle = $derived(
+		rawTitle ||
+			leftoverText ||
+			(sourceUrl ? hostname(sourceUrl) : sharedId ? 'Shared image' : 'Shared item')
+	);
+	let fallbackSubtext = $derived(leftoverText && leftoverText !== fallbackTitle ? leftoverText : '');
 	let displayTitle = $derived(fetchedTitle || fallbackTitle);
 	let displaySubtext = $derived(fetchedDescription || fallbackSubtext);
 
 	onMount(() => {
-		if (!sourceUrl) return;
-		previewLoading = true;
-		fetch(`/api/link-preview?url=${encodeURIComponent(sourceUrl)}`)
-			.then((r) => (r.ok ? r.json() : null))
-			.then((data) => {
-				if (!data) return;
-				fetchedTitle = data.title ?? null;
-				fetchedDescription = data.description ?? null;
-				fetchedImage = data.image ?? null;
-			})
-			.catch(() => {})
-			.finally(() => {
-				previewLoading = false;
-			});
+		if (sourceUrl) {
+			previewLoading = true;
+			fetch(`/api/link-preview?url=${encodeURIComponent(sourceUrl)}`)
+				.then((r) => (r.ok ? r.json() : null))
+				.then((data) => {
+					if (!data) return;
+					fetchedTitle = data.title ?? null;
+					fetchedDescription = data.description ?? null;
+					fetchedImage = data.image ?? null;
+				})
+				.catch(() => {})
+				.finally(() => {
+					previewLoading = false;
+				});
+		}
+
+		if (sharedId) {
+			(async () => {
+				try {
+					const cache = await caches.open(SHARE_CACHE);
+					const key = `/__share/${sharedId}`;
+					const res = await cache.match(key);
+					if (!res) return;
+					const blob = await res.blob();
+					await cache.delete(key);
+					if (blob.size > MAX_IMAGE_BYTES) {
+						sharedImageTooLarge = true;
+						return;
+					}
+					sharedImageDataUrl = await new Promise<string>((resolve, reject) => {
+						const reader = new FileReader();
+						reader.onload = () => resolve(reader.result as string);
+						reader.onerror = reject;
+						reader.readAsDataURL(blob);
+					});
+				} catch {
+					// no image ever arrives — just proceed as a text-only capture
+				} finally {
+					sharedImageLoading = false;
+				}
+			})();
+		}
 	});
 
 	let caption = $state('');
 	let submitted = $state(false);
 	let submittedKey = $state<string | null>(null);
-	let showToast = $state(false);
-	let toastLabel = $state('');
 	let dismissed = $state(false);
-	let pending = $state<{ entry: OutboxEntry; noteId: string | null } | null>(null);
-	let navTimer: ReturnType<typeof setTimeout>;
+
+	function buildContent(): string {
+		const parts: string[] = [];
+		if (sharedImageDataUrl) parts.push(`![Shared image](${sharedImageDataUrl})`);
+		if (caption.trim()) parts.push(caption.trim());
+		return parts.join('\n\n');
+	}
 
 	// Android launches a share-target navigation as a fresh activity with no
 	// prior history, which is precisely the condition browsers require to
 	// honor a script-initiated window.close() — so this has a real shot at
-	// dropping the user straight back into the app they shared from. If it's
-	// not permitted (e.g. testing in a normal browser tab), fall back home.
-	function leave() {
+	// dropping the user straight back into the app they shared from. We move
+	// to "/" first (replacing this history entry) before trying, so that if
+	// the OS kills the process before close() lands, relaunching the app
+	// resumes on the home river instead of a dead capture screen.
+	async function leave() {
 		dismissed = true;
-		setTimeout(() => {
-			window.close();
-			setTimeout(() => goto('/'), 250);
-		}, 180);
+		await goto('/', { replaceState: true, noScroll: true });
+		window.close();
 	}
 
-	function saveWith(tagNames: string[], label: string, key: string) {
+	function saveWith(tagNames: string[], key: string) {
 		if (submitted) return;
 		submitted = true;
 		submittedKey = key;
 
 		const entry = queueNote({
 			title: displayTitle,
-			content_markdown: caption,
+			content_markdown: buildContent(),
 			source_url: sourceUrl,
-			source_type: sourceUrl ? 'share' : null,
+			source_type: sourceUrl || sharedImageDataUrl ? 'share' : null,
+			source_title: fetchedTitle,
+			source_description: fetchedDescription,
+			source_image: fetchedImage,
 			tagNames
 		});
-		pending = { entry, noteId: null };
 
-		toastLabel = label;
-		showToast = true;
-		navTimer = setTimeout(leave, 950);
-
-		syncEntry(entry, (id) => {
-			if (pending?.entry.client_id === entry.client_id) pending.noteId = id;
-		});
+		if (sharedImageDataUrl) {
+			// The embedded image can be well over keepalive's safe size, so
+			// wait for the real upload rather than firing-and-leaving.
+			syncEntryNow(entry).then(leave);
+		} else {
+			// localStorage write above is already durable, and the POST goes
+			// out with keepalive, so there's nothing left to wait on — just a
+			// beat for the checkmark to register before the sheet closes.
+			syncEntry(entry);
+			setTimeout(leave, 150);
+		}
 	}
 
 	function openInEditor() {
 		if (submitted) return;
 		const q = new URLSearchParams();
 		if (displayTitle) q.set('title', displayTitle);
-		if (caption || leftoverText) q.set('content', caption || leftoverText);
+		const content = buildContent() || caption || leftoverText;
+		if (content) q.set('content', content);
 		if (sourceUrl) q.set('source_url', sourceUrl);
+		if (fetchedTitle) q.set('source_title', fetchedTitle);
+		if (fetchedDescription) q.set('source_description', fetchedDescription);
+		if (fetchedImage) q.set('source_image', fetchedImage);
 		goto(`/note/new?${q.toString()}`);
-	}
-
-	async function undo() {
-		clearTimeout(navTimer);
-		showToast = false;
-		if (!pending) return;
-		removeFromOutbox(pending.entry.client_id);
-		if (pending.noteId) {
-			await fetch(`/api/notes/${pending.noteId}?hard=1`, { method: 'DELETE', keepalive: true });
-		}
-		pending = null;
 	}
 </script>
 
@@ -151,40 +195,62 @@
 			</div>
 
 			<div class="min-h-0 flex-1 overflow-y-auto pb-1">
-				<div
-					class="mt-1 mb-4 rounded-[var(--radius-lg)] p-4"
-					style="background: var(--color-surface); border: 1px solid var(--color-border);"
-				>
-					<div class="flex gap-3">
-						{#if fetchedImage}
+				{#if sharedImageLoading}
+					<div
+						class="mt-1 mb-4 flex h-32 items-center justify-center rounded-[var(--radius-lg)]"
+						style="background: var(--color-surface); border: 1px solid var(--color-border);"
+					>
+						<div class="h-5 w-5 animate-spin rounded-full border-2" style="border-color: var(--color-border); border-top-color: var(--color-accent);"
+						></div>
+					</div>
+				{:else}
+					<div
+						class="mt-1 mb-4 rounded-[var(--radius-lg)] p-4"
+						style="background: var(--color-surface); border: 1px solid var(--color-border);"
+					>
+						{#if sharedImageDataUrl}
 							<img
-								src={fetchedImage}
+								src={sharedImageDataUrl}
 								alt=""
-								class="h-14 w-14 shrink-0 rounded-[var(--radius-sm)] object-cover"
+								class="mb-3 max-h-48 w-full rounded-[var(--radius-md)] object-cover"
 								style="background: var(--color-surface-2);"
 							/>
+						{:else if sharedImageTooLarge}
+							<p class="mb-3 text-xs" style="color: var(--color-danger);">
+								Image is too large to attach right now — saving the text only.
+							</p>
 						{/if}
-						<div class="min-w-0 flex-1">
-							{#if sourceUrl}
-								<span
-									class="mb-1.5 inline-block rounded-full px-2 py-0.5 text-[0.7rem]"
-									style="background: var(--color-surface-2); color: var(--color-ink-muted);"
-								>
-									{hostname(sourceUrl)}
-								</span>
-							{/if}
-							<p class="line-clamp-3 text-[0.95rem] leading-snug font-medium">{displayTitle}</p>
-							{#if displaySubtext}
-								<p class="mt-1 line-clamp-2 text-sm" style="color: var(--color-ink-muted);">{displaySubtext}</p>
-							{:else if previewLoading}
-								<div
-									class="mt-1.5 h-2.5 w-2/3 animate-pulse rounded-full"
+						<div class="flex gap-3">
+							{#if fetchedImage && !sharedImageDataUrl}
+								<img
+									src={fetchedImage}
+									alt=""
+									class="h-14 w-14 shrink-0 rounded-[var(--radius-sm)] object-cover"
 									style="background: var(--color-surface-2);"
-								></div>
+								/>
 							{/if}
+							<div class="min-w-0 flex-1">
+								{#if sourceUrl}
+									<span
+										class="mb-1.5 inline-block rounded-full px-2 py-0.5 text-[0.7rem]"
+										style="background: var(--color-surface-2); color: var(--color-ink-muted);"
+									>
+										{hostname(sourceUrl)}
+									</span>
+								{/if}
+								<p class="line-clamp-3 text-[0.95rem] leading-snug font-medium">{displayTitle}</p>
+								{#if displaySubtext}
+									<p class="mt-1 line-clamp-2 text-sm" style="color: var(--color-ink-muted);">{displaySubtext}</p>
+								{:else if previewLoading}
+									<div
+										class="mt-1.5 h-2.5 w-2/3 animate-pulse rounded-full"
+										style="background: var(--color-surface-2);"
+									></div>
+								{/if}
+							</div>
 						</div>
 					</div>
-				</div>
+				{/if}
 
 				<textarea
 					bind:value={caption}
@@ -200,9 +266,9 @@
 					{#each QUICK_TAGS as tag (tag)}
 						{@const done = submittedKey === tag}
 						<button
-							onclick={() => saveWith([tag], `Saved · #${tag}`, tag)}
+							onclick={() => saveWith([tag], tag)}
 							disabled={submitted}
-							class="flex aspect-square flex-col items-center justify-center gap-1 rounded-[var(--radius-lg)] text-sm font-medium transition-colors duration-150 disabled:opacity-100"
+							class="flex aspect-square flex-col items-center justify-center gap-1 rounded-[var(--radius-lg)] text-sm font-medium disabled:opacity-100"
 							style={done
 								? 'background: var(--color-success-soft); color: var(--color-success);'
 								: `background: var(--color-accent-soft); color: var(--color-accent); ${submitted ? 'opacity: 0.4;' : ''}`}
@@ -232,9 +298,9 @@
 				</div>
 
 				<button
-					onclick={() => saveWith([], 'Saved to Inbox', 'inbox')}
+					onclick={() => saveWith([], 'inbox')}
 					disabled={submitted}
-					class="mt-3 flex w-full items-center justify-center gap-2 rounded-[var(--radius-md)] py-4 text-base font-medium transition-colors duration-150"
+					class="mt-3 flex w-full items-center justify-center gap-2 rounded-[var(--radius-md)] py-4 text-base font-medium"
 					style={submittedKey === 'inbox'
 						? 'background: var(--color-success-soft); color: var(--color-success);'
 						: `background: var(--color-accent); color: var(--color-accent-ink); ${submitted ? 'opacity: 0.4;' : ''}`}
@@ -249,22 +315,6 @@
 					{/if}
 				</button>
 			</div>
-		</div>
-	</div>
-{/if}
-
-{#if showToast}
-	<div
-		class="fixed inset-x-0 bottom-6 z-50 flex justify-center px-4"
-		style="padding-bottom: env(safe-area-inset-bottom);"
-		transition:fly={{ y: 20, duration: 150 }}
-	>
-		<div
-			class="flex items-center gap-3 rounded-full px-5 py-3 text-sm font-medium shadow-lg"
-			style="background: var(--color-ink); color: var(--color-bg);"
-		>
-			<span>{toastLabel}</span>
-			<button onclick={undo} class="font-semibold underline underline-offset-2">Undo</button>
 		</div>
 	</div>
 {/if}
