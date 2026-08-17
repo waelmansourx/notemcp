@@ -1,8 +1,14 @@
 import tailwindcss from '@tailwindcss/vite';
-import adapter from '@sveltejs/adapter-node';
+import adapterNetlify from '@sveltejs/adapter-netlify';
+import adapterNode from '@sveltejs/adapter-node';
 import { sveltekit } from '@sveltejs/kit/vite';
 import { SvelteKitPWA } from '@vite-pwa/sveltekit';
 import { defineConfig } from 'vite';
+
+const adapter =
+	process.env.NETLIFY === 'true' || process.env.ADAPTER === 'netlify'
+		? adapterNetlify()
+		: adapterNode();
 
 export default defineConfig({
 	plugins: [
@@ -13,7 +19,7 @@ export default defineConfig({
 				runes: ({ filename }) =>
 					filename.split(/[/\\]/).includes('node_modules') ? undefined : true
 			},
-			adapter: adapter()
+			adapter
 		}),
 		SvelteKitPWA({
 			registerType: 'autoUpdate',
