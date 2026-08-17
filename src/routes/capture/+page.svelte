@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
+	import { onMount } from 'svelte';
 	import { hostname } from '$lib/dates';
 	import { QUICK_TAGS } from '$lib/types';
 	import { queueNote, removeFromOutbox, syncEntry, type OutboxEntry } from '$lib/outbox';
@@ -16,11 +17,40 @@
 	const foundUrl = rawUrl || rawText.match(urlRegex)?.[0] || rawTitle.match(urlRegex)?.[0] || '';
 	const sourceUrl = foundUrl || null;
 	const leftoverText = rawText.replace(urlRegex, '').trim();
-	const previewTitle = rawTitle || leftoverText || (sourceUrl ? hostname(sourceUrl) : 'Shared item');
-	const previewSubtext = leftoverText && leftoverText !== previewTitle ? leftoverText : '';
+	const fallbackTitle = rawTitle || leftoverText || (sourceUrl ? hostname(sourceUrl) : 'Shared item');
+	const fallbackSubtext = leftoverText && leftoverText !== fallbackTitle ? leftoverText : '';
+
+	// Best-effort link preview — fetched in the background and never blocks
+	// saving. If it resolves before the user taps something, it replaces the
+	// raw shared text with the page's real title.
+	let fetchedTitle = $state<string | null>(null);
+	let fetchedDescription = $state<string | null>(null);
+	let fetchedImage = $state<string | null>(null);
+	let previewLoading = $state(false);
+
+	let displayTitle = $derived(fetchedTitle || fallbackTitle);
+	let displaySubtext = $derived(fetchedDescription || fallbackSubtext);
+
+	onMount(() => {
+		if (!sourceUrl) return;
+		previewLoading = true;
+		fetch(`/api/link-preview?url=${encodeURIComponent(sourceUrl)}`)
+			.then((r) => (r.ok ? r.json() : null))
+			.then((data) => {
+				if (!data) return;
+				fetchedTitle = data.title ?? null;
+				fetchedDescription = data.description ?? null;
+				fetchedImage = data.image ?? null;
+			})
+			.catch(() => {})
+			.finally(() => {
+				previewLoading = false;
+			});
+	});
 
 	let caption = $state('');
-	let saving = $state(false);
+	let submitted = $state(false);
+	let submittedKey = $state<string | null>(null);
 	let showToast = $state(false);
 	let toastLabel = $state('');
 	let dismissed = $state(false);
@@ -40,12 +70,13 @@
 		}, 180);
 	}
 
-	function saveWith(tagNames: string[], label: string) {
-		if (saving) return;
-		saving = true;
+	function saveWith(tagNames: string[], label: string, key: string) {
+		if (submitted) return;
+		submitted = true;
+		submittedKey = key;
 
 		const entry = queueNote({
-			title: previewTitle,
+			title: displayTitle,
 			content_markdown: caption,
 			source_url: sourceUrl,
 			source_type: sourceUrl ? 'share' : null,
@@ -55,18 +86,17 @@
 
 		toastLabel = label;
 		showToast = true;
-		navTimer = setTimeout(leave, 1200);
+		navTimer = setTimeout(leave, 950);
 
 		syncEntry(entry, (id) => {
 			if (pending?.entry.client_id === entry.client_id) pending.noteId = id;
 		});
-
-		saving = false;
 	}
 
 	function openInEditor() {
+		if (submitted) return;
 		const q = new URLSearchParams();
-		if (previewTitle) q.set('title', previewTitle);
+		if (displayTitle) q.set('title', displayTitle);
 		if (caption || leftoverText) q.set('content', caption || leftoverText);
 		if (sourceUrl) q.set('source_url', sourceUrl);
 		goto(`/note/new?${q.toString()}`);
@@ -125,18 +155,35 @@
 					class="mt-1 mb-4 rounded-[var(--radius-lg)] p-4"
 					style="background: var(--color-surface); border: 1px solid var(--color-border);"
 				>
-					{#if sourceUrl}
-						<span
-							class="mb-1.5 inline-block rounded-full px-2 py-0.5 text-[0.7rem]"
-							style="background: var(--color-surface-2); color: var(--color-ink-muted);"
-						>
-							{hostname(sourceUrl)}
-						</span>
-					{/if}
-					<p class="line-clamp-3 text-[0.95rem] leading-snug font-medium">{previewTitle}</p>
-					{#if previewSubtext}
-						<p class="mt-1 line-clamp-2 text-sm" style="color: var(--color-ink-muted);">{previewSubtext}</p>
-					{/if}
+					<div class="flex gap-3">
+						{#if fetchedImage}
+							<img
+								src={fetchedImage}
+								alt=""
+								class="h-14 w-14 shrink-0 rounded-[var(--radius-sm)] object-cover"
+								style="background: var(--color-surface-2);"
+							/>
+						{/if}
+						<div class="min-w-0 flex-1">
+							{#if sourceUrl}
+								<span
+									class="mb-1.5 inline-block rounded-full px-2 py-0.5 text-[0.7rem]"
+									style="background: var(--color-surface-2); color: var(--color-ink-muted);"
+								>
+									{hostname(sourceUrl)}
+								</span>
+							{/if}
+							<p class="line-clamp-3 text-[0.95rem] leading-snug font-medium">{displayTitle}</p>
+							{#if displaySubtext}
+								<p class="mt-1 line-clamp-2 text-sm" style="color: var(--color-ink-muted);">{displaySubtext}</p>
+							{:else if previewLoading}
+								<div
+									class="mt-1.5 h-2.5 w-2/3 animate-pulse rounded-full"
+									style="background: var(--color-surface-2);"
+								></div>
+							{/if}
+						</div>
+					</div>
 				</div>
 
 				<textarea
@@ -151,19 +198,31 @@
 			<div class="shrink-0 pb-4">
 				<div class="grid grid-cols-3 gap-2.5">
 					{#each QUICK_TAGS as tag (tag)}
+						{@const done = submittedKey === tag}
 						<button
-							onclick={() => saveWith([tag], `Saved · #${tag}`)}
-							disabled={saving}
-							class="flex aspect-square flex-col items-center justify-center gap-1 rounded-[var(--radius-lg)] text-sm font-medium disabled:opacity-60"
-							style="background: var(--color-accent-soft); color: var(--color-accent);"
+							onclick={() => saveWith([tag], `Saved · #${tag}`, tag)}
+							disabled={submitted}
+							class="flex aspect-square flex-col items-center justify-center gap-1 rounded-[var(--radius-lg)] text-sm font-medium transition-colors duration-150 disabled:opacity-100"
+							style={done
+								? 'background: var(--color-success-soft); color: var(--color-success);'
+								: `background: var(--color-accent-soft); color: var(--color-accent); ${submitted ? 'opacity: 0.4;' : ''}`}
 						>
-							#{tag}
+							{#if done}
+								<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"
+									><path d="M20 6 9 17l-5-5" /></svg
+								>
+							{:else}
+								#{tag}
+							{/if}
 						</button>
 					{/each}
 					<button
 						onclick={openInEditor}
+						disabled={submitted}
 						class="flex aspect-square flex-col items-center justify-center gap-1 rounded-[var(--radius-lg)] text-sm font-medium"
-						style="background: var(--color-surface); border: 1px solid var(--color-border); color: var(--color-ink-muted);"
+						style="background: var(--color-surface); border: 1px solid var(--color-border); color: var(--color-ink-muted); {submitted
+							? 'opacity: 0.4;'
+							: ''}"
 					>
 						<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
 							><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><path d="M15 3h6v6" /><path d="M10 14 21 3" /></svg
@@ -173,12 +232,21 @@
 				</div>
 
 				<button
-					onclick={() => saveWith([], 'Saved to Inbox')}
-					disabled={saving}
-					class="mt-3 w-full rounded-[var(--radius-md)] py-4 text-base font-medium disabled:opacity-60"
-					style="background: var(--color-accent); color: var(--color-accent-ink);"
+					onclick={() => saveWith([], 'Saved to Inbox', 'inbox')}
+					disabled={submitted}
+					class="mt-3 flex w-full items-center justify-center gap-2 rounded-[var(--radius-md)] py-4 text-base font-medium transition-colors duration-150"
+					style={submittedKey === 'inbox'
+						? 'background: var(--color-success-soft); color: var(--color-success);'
+						: `background: var(--color-accent); color: var(--color-accent-ink); ${submitted ? 'opacity: 0.4;' : ''}`}
 				>
-					Just save
+					{#if submittedKey === 'inbox'}
+						<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"
+							><path d="M20 6 9 17l-5-5" /></svg
+						>
+						Saved
+					{:else}
+						Just save
+					{/if}
 				</button>
 			</div>
 		</div>
@@ -189,7 +257,7 @@
 	<div
 		class="fixed inset-x-0 bottom-6 z-50 flex justify-center px-4"
 		style="padding-bottom: env(safe-area-inset-bottom);"
-		transition:fly={{ y: 20, duration: 200 }}
+		transition:fly={{ y: 20, duration: 150 }}
 	>
 		<div
 			class="flex items-center gap-3 rounded-full px-5 py-3 text-sm font-medium shadow-lg"

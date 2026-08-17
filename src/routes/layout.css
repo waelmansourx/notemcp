@@ -12,6 +12,8 @@
 	--color-accent-soft: #eaeeff;
 	--color-accent-ink: #ffffff;
 	--color-danger: #c23b34;
+	--color-success: #1f7a52;
+	--color-success-soft: #e3f3ea;
 
 	--radius-sm: 0.625rem;
 	--radius-md: 1rem;
@@ -36,6 +38,8 @@
 		--color-accent-soft: #23294a;
 		--color-accent-ink: #0f1117;
 		--color-danger: #e0685f;
+		--color-success: #5fd8a0;
+		--color-success-soft: #163828;
 	}
 }
 
