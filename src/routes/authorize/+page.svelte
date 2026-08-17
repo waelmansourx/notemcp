@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { enhance } from '$app/forms';
 	import type { PageData, ActionData } from './$types';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
@@ -45,12 +44,13 @@
 				</p>
 
 				<div class="mt-5 flex flex-col gap-2.5">
-					<form method="POST" action="?/approve" use:enhance={() => {
-						submitting = true;
-						return async ({ result }) => {
-							if (result.type !== 'redirect') submitting = false;
-						};
-					}}>
+					<!-- Plain native submit, deliberately not use:enhance — the redirect
+					     target is claude.ai (cross-origin), and only a real browser
+					     navigation follows a 303 there. A fetch-driven enhance submit
+					     gets back SvelteKit's JSON-encoded redirect result instead and
+					     has to re-drive navigation itself, which goto() won't do for an
+					     external origin. -->
+					<form method="POST" action="?/approve" onsubmit={() => (submitting = true)}>
 						<input type="hidden" name="client_id" value={data.params.client_id} />
 						<input type="hidden" name="redirect_uri" value={data.params.redirect_uri} />
 						<input type="hidden" name="code_challenge" value={data.params.code_challenge} />
