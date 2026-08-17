@@ -17,7 +17,7 @@ export default defineConfig({
 		}),
 		SvelteKitPWA({
 			registerType: 'autoUpdate',
-			injectRegister: 'auto',
+			injectRegister: false,
 			devOptions: { enabled: false },
 			manifest: {
 				name: 'NoteMCP',
