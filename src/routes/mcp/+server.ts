@@ -212,11 +212,20 @@ export const POST: RequestHandler = async ({ request, locals: { supabase } }) =>
 	if (method === 'tools/list') return rpcResult(id, { tools: TOOLS });
 
 	if (method === 'tools/call') {
-		const name = params?.name ?? '';
-		const args = params?.arguments ?? {};
-		const result = await callTool(supabase, token, name, args);
-		if (result === null) return rpcError(id, -32602, `Unknown tool: ${name}`);
-		return rpcResult(id, result);
+		try {
+			const name = params?.name ?? '';
+			const args = params?.arguments ?? {};
+			const result = await callTool(supabase, token, name, args);
+			if (result === null) return rpcError(id, -32602, `Unknown tool: ${name}`);
+			return rpcResult(id, result);
+		} catch (err) {
+			// A network blip talking to Supabase (or anything else unexpected)
+			// must not crash the function — an uncaught rejection here becomes
+			// a raw 502 to the MCP client instead of a JSON-RPC error it can
+			// actually show the user and retry against.
+			const message = err instanceof Error ? err.message : 'Unexpected error';
+			return rpcResult(id, toolResult({ error: message }, true));
+		}
 	}
 
 	return rpcError(id, -32601, `Method not found: ${method}`);
