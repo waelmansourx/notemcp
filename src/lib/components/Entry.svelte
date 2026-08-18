@@ -25,25 +25,31 @@
 	let queued = $derived(isPending(note));
 </script>
 
+<!--
+	Sized like the thing it is. A thought is the content of this app, so it's
+	set at 19px — reading size — rather than at the 16px that made the stream
+	look like a list of file names. The row breathes to match, and the meta
+	line under it is small but *bold*: small and light is what reads as filler.
+-->
 <a
 	href={queued ? undefined : `/note/${note.id}`}
-	class="entry block py-[15px] active:opacity-65"
+	class="entry block py-[19px] active:opacity-65"
 	style={queued ? 'opacity: 0.5;' : ''}
 	aria-busy={queued || undefined}
 >
 	{#if isLink}
-		<div class="flex items-start gap-3.5">
+		<div class="flex items-start gap-4">
 			<div class="min-w-0 flex-1">
 				{#if heading}
 					<h3
-						class="font-serif line-clamp-2 text-[0.97rem] leading-[1.34] font-semibold tracking-[-0.019em]"
+						class="line-clamp-2 font-serif text-[1.16rem] leading-[1.32] font-semibold tracking-[-0.018em]"
 					>
 						{heading}
 					</h3>
 				{/if}
 				{#if caption}
 					<p
-						class="font-serif mt-[5px] line-clamp-2 text-[0.905rem] leading-[1.4] tracking-[-0.012em]"
+						class="mt-1.5 line-clamp-2 font-serif text-[1.03rem] leading-[1.42] tracking-[-0.01em]"
 						style="color: var(--color-ink-2);"
 					>
 						{caption}
@@ -55,23 +61,23 @@
 					src={note.source_image}
 					alt=""
 					loading="lazy"
-					class="h-14 w-14 shrink-0 rounded-[var(--radius-lg)] object-cover"
+					class="h-[72px] w-[72px] shrink-0 rounded-[20px] object-cover"
 					style="background: var(--color-surface-2);"
 				/>
 			{/if}
 		</div>
 	{:else if hasEmbeddedImage}
-		<div class="flex items-start gap-3.5">
+		<div class="flex items-start gap-4">
 			<img
 				src={embeddedImage}
 				alt=""
 				loading="lazy"
-				class="h-14 w-14 shrink-0 rounded-[var(--radius-lg)] object-cover"
+				class="h-[72px] w-[72px] shrink-0 rounded-[20px] object-cover"
 				style="background: var(--color-surface-2);"
 			/>
 			{#if textOnly.trim()}
 				<p
-					class="font-serif line-clamp-3 min-w-0 flex-1 text-[1rem] leading-[1.44] tracking-[-0.016em] whitespace-pre-wrap"
+					class="line-clamp-3 min-w-0 flex-1 font-serif text-[1.19rem] leading-[1.5] tracking-[-0.012em] whitespace-pre-wrap"
 				>
 					{excerpt(textOnly, 200)}
 				</p>
@@ -81,7 +87,7 @@
 		<!-- Clamped: a note is as long as it needs to be, but a *list* of notes
 		     is only useful if you can see more than one of them at a time. -->
 		<p
-			class="font-serif line-clamp-6 text-[1rem] leading-[1.44] tracking-[-0.016em] whitespace-pre-wrap"
+			class="line-clamp-6 font-serif text-[1.19rem] leading-[1.5] tracking-[-0.012em] whitespace-pre-wrap"
 		>
 			{body}
 		</p>
@@ -89,7 +95,7 @@
 
 	{#if hasMeta}
 		<div
-			class="mt-[9px] flex items-center gap-1.5 text-[0.75rem]"
+			class="mt-3 flex items-center gap-2.5 text-[0.82rem] font-bold tracking-[-0.01em]"
 			style="color: var(--color-ink-faint);"
 		>
 			{#each note.tags as tag (tag.id)}
@@ -97,13 +103,15 @@
 			{/each}
 			<span class="flex-1"></span>
 			{#if isLink && note.source_url}
-				<span class="truncate" style="color: var(--color-ink-muted);"
+				<span class="truncate font-semibold" style="color: var(--color-ink-muted);"
 					>{hostname(note.source_url)}</span
 				>
 			{/if}
 			{#if showTime}
 				{#if isLink}<span aria-hidden="true">·</span>{/if}
-				<span class="whitespace-nowrap">{timeOfDay(streamDate(note))}</span>
+				<span class="font-semibold whitespace-nowrap tabular-nums"
+					>{timeOfDay(streamDate(note))}</span
+				>
 			{/if}
 		</div>
 	{/if}

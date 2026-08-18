@@ -10,8 +10,12 @@
 
 <svelte:head><title>Tags · NoteMCP</title></svelte:head>
 
-<div class="safe-top mx-auto min-h-screen max-w-2xl pb-32">
-	<StreamNav />
+<div class="safe-top mx-auto min-h-screen max-w-2xl pb-36">
+	<StreamNav
+		subtitle={data.tags.length > 0
+			? `${data.tags.length} ${data.tags.length === 1 ? 'tag' : 'tags'} in use`
+			: ''}
+	/>
 
 	<div class="px-[22px]">
 		{#if data.tags.length === 0}

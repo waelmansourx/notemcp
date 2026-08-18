@@ -98,13 +98,14 @@ textarea {
 .tag {
 	display: inline;
 	white-space: nowrap;
-	font-size: 0.75rem;
-	letter-spacing: -0.01em;
+	font-size: 0.82rem;
+	font-weight: 700;
+	letter-spacing: -0.012em;
 	color: var(--color-accent);
 }
 .tag-lg {
-	font-size: 1rem;
-	font-weight: 640;
+	font-size: 1.12rem;
+	font-weight: 700;
 	letter-spacing: -0.022em;
 }
 

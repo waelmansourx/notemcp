@@ -50,12 +50,12 @@
 	transition:fly={{ y: -12, duration: 200, easing: quintOut }}
 >
 	<div
-		class="flex items-center gap-2 rounded-[0.8rem] px-3"
+		class="flex items-center gap-2.5 rounded-[1.1rem] px-3.5"
 		style="background: var(--color-surface-2);"
 	>
 		<svg
-			width="16"
-			height="16"
+			width="18"
+			height="18"
 			viewBox="0 0 24 24"
 			fill="none"
 			stroke="currentColor"
@@ -73,7 +73,7 @@
 			autocomplete="off"
 			autocorrect="off"
 			enterkeyhint="search"
-			class="min-w-0 flex-1 bg-transparent py-2.5 text-[0.95rem] outline-none"
+			class="min-w-0 flex-1 bg-transparent py-3.5 text-[1.02rem] font-medium outline-none"
 			style="color: var(--color-ink);"
 			onkeydown={(e) => e.key === 'Escape' && clearAll()}
 		/>
@@ -102,7 +102,7 @@
 				{@const on = active.includes(tag.name)}
 				<button
 					type="button"
-					class="shrink-0 py-1 text-[0.8rem] font-semibold whitespace-nowrap active:scale-95"
+					class="shrink-0 py-1 text-[0.88rem] font-bold whitespace-nowrap active:scale-95"
 					style={on
 						? 'color: var(--color-accent); text-decoration: underline; text-underline-offset: 4px; text-decoration-thickness: 2px;'
 						: 'color: var(--color-ink-faint);'}
@@ -116,7 +116,7 @@
 	{/if}
 
 	{#if filtering}
-		<p class="mt-1.5 text-[0.72rem]" style="color: var(--color-ink-faint);">
+		<p class="mt-2 text-[0.78rem] font-semibold" style="color: var(--color-ink-faint);">
 			{showing}
 			{showing === 1 ? 'thought' : 'thoughts'} of {total}
 		</p>

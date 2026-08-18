@@ -5,7 +5,7 @@
 	import StreamNav from '$lib/components/StreamNav.svelte';
 	import StreamFilter from '$lib/components/StreamFilter.svelte';
 	import DayHeading from '$lib/components/DayHeading.svelte';
-	import { groupByDay } from '$lib/dates';
+	import { groupByDay, streamDate } from '$lib/dates';
 	import { withPending } from '$lib/stream.svelte';
 	import { applyFilter, filter } from '$lib/filter.svelte';
 	import { loadStream, saveStream } from '$lib/cache.svelte';
@@ -40,6 +40,34 @@
 	// here, so a new thought is on screen the moment it's written.
 	let notes = $derived(withPending(loaded));
 
+	// A line of context under the masthead. Both numbers come from the stream
+	// that's already on screen, so there's no second query behind them — and
+	// they're deliberately recent-window counts rather than a lifetime total,
+	// which the loaded stream can't honestly claim to know.
+	let recent = $derived.by(() => {
+		const now = new Date();
+		const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+		const weekAgo = startOfToday - 6 * 86_400_000;
+		let today = 0;
+		let week = 0;
+		for (const note of notes) {
+			const at = new Date(streamDate(note)).getTime();
+			if (at >= startOfToday) today++;
+			if (at >= weekAgo) week++;
+		}
+		return { today, week };
+	});
+
+	let subtitle = $derived(
+		notes.length === 0
+			? ''
+			: recent.today > 0
+				? `${recent.today} today · ${recent.week} this week`
+				: recent.week > 0
+					? `${recent.week} this week`
+					: 'Nothing new this week'
+	);
+
 	let activeTags = $derived(page.url.searchParams.getAll('tag'));
 	let visible = $derived(applyFilter(notes, activeTags, filter.q));
 	let groups = $derived(groupByDay(visible));
@@ -53,8 +81,8 @@
 
 <svelte:head><title>NoteMCP</title></svelte:head>
 
-<div class="safe-top mx-auto min-h-screen max-w-2xl pb-32">
-	<StreamNav />
+<div class="safe-top mx-auto min-h-screen max-w-2xl pb-36">
+	<StreamNav {subtitle} />
 
 	{#if showFilter}
 		<StreamFilter tags={data.allTags} total={notes.length} showing={visible.length} />
@@ -62,7 +90,10 @@
 
 	<div class="px-[22px]">
 		{#if groups.length === 0}
-			<p class="pt-24 text-center text-[0.94rem]" style="color: var(--color-ink-muted);">
+			<p
+				class="pt-24 text-center text-[1.05rem] leading-[1.5] font-medium tracking-[-0.015em]"
+				style="color: var(--color-ink-muted);"
+			>
 				{#if filtering}
 					Nothing here matches. Try fewer words, or a different tag.
 				{:else}

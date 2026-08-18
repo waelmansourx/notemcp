@@ -348,20 +348,20 @@
 	class:opacity-0={open || recording}
 >
 	<div
-		class="pointer-events-auto flex h-[54px] flex-1 cursor-text touch-manipulation items-center rounded-[1.1rem] pr-1.5 pl-[22px]"
-		style="background: var(--color-accent); color: var(--color-accent-ink); box-shadow: 0 8px 22px rgba(20,80,58,.26);"
+		class="pointer-events-auto flex h-[62px] flex-1 cursor-text touch-manipulation items-center rounded-[22px] pr-2 pl-[22px]"
+		style="background: var(--color-accent); color: var(--color-accent-ink); box-shadow: 0 10px 26px rgba(20,80,58,.26);"
 		onclick={openSheet}
 		onkeydown={(e) => e.key === 'Enter' && openSheet()}
 		role="button"
 		tabindex="0"
 	>
-		<span class="flex-1 text-[0.97rem] font-medium opacity-95">
+		<span class="flex-1 text-[1.05rem] font-bold tracking-[-0.02em] opacity-95">
 			{contextTag ? `Write in #${contextTag}…` : 'Write something…'}
 		</span>
 		<button
 			type="button"
 			aria-label="Record a thought"
-			class="grid h-[38px] w-[38px] shrink-0 place-items-center rounded-[0.7rem] active:scale-95"
+			class="grid h-[46px] w-[46px] shrink-0 place-items-center rounded-[14px] active:scale-95"
 			style="background: rgba(255,255,255,.16); color: var(--color-accent-ink);"
 			onclick={(e) => {
 				e.stopPropagation();
@@ -369,8 +369,8 @@
 			}}
 		>
 			<svg
-				width="17"
-				height="17"
+				width="20"
+				height="20"
 				viewBox="0 0 24 24"
 				fill="none"
 				stroke="currentColor"
@@ -386,17 +386,17 @@
 	<button
 		type="button"
 		aria-label="Search and filter"
-		class="pointer-events-auto grid h-[54px] w-[54px] shrink-0 place-items-center rounded-[1.1rem] active:scale-95"
+		class="pointer-events-auto grid h-[62px] w-[62px] shrink-0 place-items-center rounded-[22px] active:scale-95"
 		style="background: var(--color-surface); border: 1px solid var(--color-border); box-shadow: 0 3px 12px rgba(0,0,0,.055); color: var(--color-ink-2);"
 		onclick={search}
 	>
 		<svg
-			width="19"
-			height="19"
+			width="22"
+			height="22"
 			viewBox="0 0 24 24"
 			fill="none"
 			stroke="currentColor"
-			stroke-width="2"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg
+			stroke-width="2.2"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg
 		>
 	</button>
 </div>
@@ -623,7 +623,7 @@
 			onkeydown={onKeydown}
 			rows="4"
 			placeholder="Write something…"
-			class="font-serif min-h-[calc(1.06rem*1.44*4)] w-full flex-auto resize-none overflow-y-auto bg-transparent text-[1.06rem] leading-[1.44] tracking-[-0.017em] outline-none"
+			class="min-h-[calc(1.06rem*1.44*4)] w-full flex-auto resize-none overflow-y-auto bg-transparent font-serif text-[1.06rem] leading-[1.44] tracking-[-0.017em] outline-none"
 		></textarea>
 
 		<div class="mt-2 flex shrink-0 items-center gap-2">
