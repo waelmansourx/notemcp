@@ -105,6 +105,14 @@ function decorate(view: EditorView): DecorationSet {
 	const ranges: Range<Decoration>[] = [];
 	const { doc } = view.state;
 
+	// While an IME composition is in progress (which on Android covers most
+	// typing, per CodeMirror's own docs), rewriting the DOM under the caret —
+	// hiding a list mark, swapping a checkbox widget in, wrapping a span —
+	// desyncs the keyboard's composition and corrupts what gets typed. So the
+	// line currently being composed is left as plain, undecorated markdown
+	// until composition ends; every other line still restyles live.
+	const composingLine = view.compositionStarted ? doc.lineAt(view.state.selection.main.head) : null;
+
 	// Only the visible viewport is decorated — a long note stays cheap to
 	// scroll because offscreen lines never build decorations at all.
 	for (const { from, to } of view.visibleRanges) {
@@ -119,6 +127,10 @@ function decorate(view: EditorView): DecorationSet {
 					ranges.push(
 						Decoration.line({ class: `cm-md-h${level}` }).range(doc.lineAt(node.from).from)
 					);
+					return;
+				}
+
+				if (composingLine && node.from < composingLine.to && node.to > composingLine.from) {
 					return;
 				}
 
@@ -199,15 +211,28 @@ function decorate(view: EditorView): DecorationSet {
 const livePreviewPlugin = ViewPlugin.fromClass(
 	class {
 		decorations: DecorationSet;
+		composing: boolean;
 
 		constructor(view: EditorView) {
 			this.decorations = decorate(view);
+			this.composing = view.compositionStarted;
 		}
 
 		update(update: ViewUpdate) {
-			if (update.docChanged || update.viewportChanged || update.selectionSet) {
+			const composing = update.view.compositionStarted;
+			// Composition starting/ending changes what decorate() should skip
+			// even when nothing else about the update would have triggered a
+			// redecorate (e.g. Android opens a composition just by placing the
+			// cursor in a word, with no doc change yet).
+			if (
+				update.docChanged ||
+				update.viewportChanged ||
+				update.selectionSet ||
+				composing !== this.composing
+			) {
 				this.decorations = decorate(update.view);
 			}
+			this.composing = composing;
 		}
 	},
 	{ decorations: (plugin) => plugin.decorations }

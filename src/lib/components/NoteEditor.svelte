@@ -57,6 +57,30 @@
 		return () => clearTimeout(timer);
 	});
 
+	// `interactive-widget=resizes-content` (app.html) handles this on newer
+	// Chrome by shrinking the layout viewport with the keyboard, which is all
+	// `sticky; bottom: 0` needs. Older Chrome and Safari don't honor it, so
+	// the toolbar sticks to the bottom of the *unshrunk* layout — behind the
+	// keyboard — unless it's nudged up by however much the visual viewport
+	// has actually shrunk.
+	let toolbarBar = $state<HTMLDivElement | null>(null);
+	$effect(() => {
+		const vv = window.visualViewport;
+		if (!vv || !toolbarBar) return;
+		const bar = toolbarBar;
+		function reposition() {
+			const overlap = window.innerHeight - vv!.height - vv!.offsetTop;
+			bar.style.transform = overlap > 1 ? `translateY(-${overlap}px)` : '';
+		}
+		vv.addEventListener('resize', reposition);
+		vv.addEventListener('scroll', reposition);
+		reposition();
+		return () => {
+			vv.removeEventListener('resize', reposition);
+			vv.removeEventListener('scroll', reposition);
+		};
+	});
+
 	let ready = false;
 	$effect(() => {
 		title;
@@ -385,6 +409,7 @@
 	<MarkdownEditor bind:this={editor} bind:value={content} bind:focused={editorFocused} />
 
 	<div
+		bind:this={toolbarBar}
 		class="sticky bottom-0 -mx-4 flex flex-wrap items-center gap-1.5 px-4 pt-2 pb-2"
 		style="background: var(--color-bg); border-top: 1px solid var(--color-border);"
 	>

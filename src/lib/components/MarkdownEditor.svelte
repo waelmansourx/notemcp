@@ -13,6 +13,15 @@
 	let view = $state<EditorView | null>(null);
 	let commands = $state<typeof import('$lib/editor/markdown-live').formatCommands | null>(null);
 
+	// Set if the user taps the pre-hydration fallback before CodeMirror has
+	// finished loading — on a cold start that gap is long enough to tap into,
+	// and a tap on a plain, non-editable div otherwise just gets lost, leaving
+	// the note looking unfocused with no keyboard up.
+	let pendingFocus = false;
+	function claimPendingFocus() {
+		if (!view) pendingFocus = true;
+	}
+
 	onMount(() => {
 		let cancelled = false;
 		let instance: EditorView | null = null;
@@ -31,6 +40,10 @@
 			});
 			view = instance;
 			commands = module.formatCommands;
+			if (pendingFocus) {
+				pendingFocus = false;
+				instance.focus();
+			}
 		});
 
 		return () => {
@@ -57,12 +70,36 @@
 
 	// Reconcile edits made to `value` from outside the editor (the checklist
 	// toggle in the header rewrites the whole document). Guarded on an actual
-	// difference so the editor's own changes don't loop back into it.
+	// difference so the editor's own changes don't loop back into it, and
+	// skipped entirely while the editor has focus — the only external writer
+	// is a header button, which always blurs the editor first, so this only
+	// ever needs to run against a doc the user isn't actively typing into.
+	// The diff is trimmed to its changed middle rather than replacing the
+	// whole document: a single from-0-to-end change maps every existing
+	// selection into the replacement, which is what was throwing the caret
+	// to the start or end of the note on every external rewrite.
 	$effect(() => {
 		const next = value;
-		if (!view || next === view.state.doc.toString()) return;
+		if (!view || view.hasFocus) return;
+		const current = view.state.doc.toString();
+		if (next === current) return;
+
+		let start = 0;
+		const maxStart = Math.min(current.length, next.length);
+		while (start < maxStart && current[start] === next[start]) start++;
+
+		let end = 0;
+		const maxEnd = Math.min(current.length - start, next.length - start);
+		while (end < maxEnd && current[current.length - 1 - end] === next[next.length - 1 - end]) {
+			end++;
+		}
+
 		view.dispatch({
-			changes: { from: 0, to: view.state.doc.length, insert: next }
+			changes: {
+				from: start,
+				to: current.length - end,
+				insert: next.slice(start, next.length - end)
+			}
 		});
 	});
 </script>
@@ -73,7 +110,7 @@
 	{#if !view}
 		<!-- Pre-hydration stand-in: same metrics as the editor, so the swap
 		     when CodeMirror mounts doesn't shift the text. -->
-		<div class="cm-fallback" aria-hidden="true">
+		<div class="cm-fallback" aria-hidden="true" onpointerdown={claimPendingFocus}>
 			{#if value}{value}{:else}<span style="color: var(--color-ink-faint);">{placeholder}</span
 				>{/if}
 		</div>
