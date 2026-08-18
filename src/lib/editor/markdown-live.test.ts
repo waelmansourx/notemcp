@@ -1,7 +1,7 @@
 /// <reference types="bun" />
 import { describe, expect, test } from 'bun:test';
-import { EditorState } from '@codemirror/state';
-import { continueList, taskToggleEdit } from './markdown-live';
+import { EditorSelection, EditorState } from '@codemirror/state';
+import { continueList, formatCommands, taskToggleEdit, type FormatAction } from './markdown-live';
 
 // `|` marks the caret. Returns the document with the caret marked again, or
 // null when the command declines to handle the key (letting CodeMirror's own
@@ -59,6 +59,75 @@ describe('continueList', () => {
 		expect(pressEnter('just text|')).toBeNull();
 		expect(pressEnter('- [ ]| milk')).toBeNull();
 		expect(pressEnter('|- milk')).toBeNull();
+	});
+});
+
+// Runs a toolbar command over `doc`, optionally with the given selection,
+// and returns the resulting text (with `|` marking the caret when asked).
+function format(
+	action: FormatAction,
+	doc: string,
+	selection?: { anchor: number; head: number },
+	showCaret = false
+): string {
+	let state = EditorState.create({
+		doc,
+		selection: selection
+			? EditorSelection.single(selection.anchor, selection.head)
+			: EditorSelection.cursor(doc.length)
+	});
+	formatCommands[action]({
+		state,
+		dispatch: (tr) => {
+			state = tr.state;
+		}
+	});
+	const text = state.doc.toString();
+	if (!showCaret) return text;
+	const caret = state.selection.main.head;
+	return text.slice(0, caret) + '|' + text.slice(caret);
+}
+
+describe('toolbar block commands', () => {
+	test('the checkbox button toggles a task on and off', () => {
+		expect(format('task', 'milk')).toBe('- [ ] milk');
+		expect(format('task', '- [ ] milk')).toBe('milk');
+	});
+
+	test('block markers replace each other rather than stacking', () => {
+		expect(format('task', '- milk')).toBe('- [ ] milk');
+		expect(format('bullet', '- [ ] milk')).toBe('- milk');
+		expect(format('heading', '- [ ] hi')).toBe('# hi');
+	});
+
+	test('indentation survives a toggle', () => {
+		expect(format('task', '   milk')).toBe('   - [ ] milk');
+	});
+
+	test('the heading button cycles plain -> H1 -> H2 -> plain', () => {
+		expect(format('heading', 'hi')).toBe('# hi');
+		expect(format('heading', '# hi')).toBe('## hi');
+		expect(format('heading', '## hi')).toBe('hi');
+	});
+
+	test('applies to every line the selection touches', () => {
+		expect(format('task', 'a\nb\nc', { anchor: 0, head: 5 })).toBe('- [ ] a\n- [ ] b\n- [ ] c');
+	});
+});
+
+describe('toolbar inline commands', () => {
+	test('bold wraps a selection and unwraps it again', () => {
+		expect(format('bold', 'milk', { anchor: 0, head: 4 })).toBe('**milk**');
+		expect(format('bold', '**milk**', { anchor: 2, head: 6 })).toBe('milk');
+	});
+
+	test('bold with no selection leaves the caret between the markers', () => {
+		expect(format('bold', 'x', undefined, true)).toBe('x**|**');
+	});
+
+	test('link puts the caret where the next thing to type goes', () => {
+		expect(format('link', '', undefined, true)).toBe('[|]()');
+		expect(format('link', 'site', { anchor: 0, head: 4 }, true)).toBe('[site](|)');
 	});
 });
 

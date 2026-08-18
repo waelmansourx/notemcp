@@ -1,14 +1,17 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import type { EditorView } from '@codemirror/view';
+	import type { FormatAction } from '$lib/editor/markdown-live';
 
 	let {
 		value = $bindable(''),
-		placeholder = 'Write something…'
-	}: { value?: string; placeholder?: string } = $props();
+		placeholder = 'Write something…',
+		focused = $bindable(false)
+	}: { value?: string; placeholder?: string; focused?: boolean } = $props();
 
 	let host: HTMLDivElement;
 	let view = $state<EditorView | null>(null);
+	let commands = $state<typeof import('$lib/editor/markdown-live').formatCommands | null>(null);
 
 	onMount(() => {
 		let cancelled = false;
@@ -17,15 +20,17 @@
 		// CodeMirror is browser-only and is the heaviest thing on this route,
 		// so it's imported here rather than statically: the note's text is
 		// already on screen (see the fallback below) by the time it arrives.
-		import('$lib/editor/markdown-live').then(({ createMarkdownEditor }) => {
+		import('$lib/editor/markdown-live').then((module) => {
 			if (cancelled) return;
-			instance = createMarkdownEditor({
+			instance = module.createMarkdownEditor({
 				parent: host,
 				doc: value,
 				placeholder,
-				onChange: (next) => (value = next)
+				onChange: (next) => (value = next),
+				onFocusChange: (next) => (focused = next)
 			});
 			view = instance;
+			commands = module.formatCommands;
 		});
 
 		return () => {
@@ -33,6 +38,22 @@
 			instance?.destroy();
 		};
 	});
+
+	// Called by the formatting toolbar. Focus is restored afterwards because
+	// the command runs from a button press, and on mobile losing the caret
+	// would also dismiss the keyboard mid-edit.
+	export function applyFormat(action: FormatAction) {
+		if (!view || !commands) return;
+		commands[action]({ state: view.state, dispatch: (tr) => view!.dispatch(tr) });
+		view.focus();
+	}
+
+	// Lets the title field hand the caret over on Enter.
+	export function focusEditor() {
+		if (!view) return;
+		view.focus();
+		view.dispatch({ selection: { anchor: view.state.doc.length } });
+	}
 
 	// Reconcile edits made to `value` from outside the editor (the checklist
 	// toggle in the header rewrites the whole document). Guarded on an actual

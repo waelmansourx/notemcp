@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import MarkdownEditor from '$lib/components/MarkdownEditor.svelte';
+	import EditorToolbar from '$lib/components/EditorToolbar.svelte';
 	import { TASK_ITEM_RE } from '$lib/markdown';
 	import { hostname } from '$lib/dates';
 	import type { Note } from '$lib/types';
@@ -39,6 +40,22 @@
 	let tagError = $state('');
 	let saveState = $state<'idle' | 'saving' | 'saved'>('idle');
 	let deleting = $state(false);
+
+	let editor = $state<ReturnType<typeof MarkdownEditor> | null>(null);
+	let editorFocused = $state(false);
+
+	// Only one bar sits above the keyboard: formatting while you're writing,
+	// tags when you're not. Hiding lags focus slightly so that a tap which
+	// briefly moves focus can't make the toolbar vanish out from under it.
+	let showToolbar = $state(false);
+	$effect(() => {
+		if (editorFocused) {
+			showToolbar = true;
+			return;
+		}
+		const timer = setTimeout(() => (showToolbar = false), 200);
+		return () => clearTimeout(timer);
+	});
 
 	let ready = false;
 	$effect(() => {
@@ -341,82 +358,102 @@
 		</a>
 	{/if}
 
-	<input
-		type="text"
+	<!--
+		A textarea rather than an <input>: Chrome on Android offers password /
+		credit-card / address autofill on single-line text inputs, which put a
+		row of unwanted suggestions above the keyboard on every note. A
+		textarea gets no such treatment, and it lets a long title wrap instead
+		of scrolling sideways. `field-sizing: content` (layout.css) keeps it
+		one line tall until it actually needs two.
+	-->
+	<textarea
 		bind:value={title}
+		rows="1"
 		placeholder="Title"
-		class="mb-1.5 w-full bg-transparent text-xl font-semibold tracking-tight outline-none"
-		style="color: var(--color-ink);"
-	/>
+		autocomplete="off"
+		autocapitalize="sentences"
+		enterkeyhint="next"
+		onkeydown={(e) => {
+			if (e.key === 'Enter') {
+				e.preventDefault();
+				editor?.focusEditor();
+			}
+		}}
+		class="mb-1.5 w-full resize-none overflow-hidden bg-transparent text-xl font-semibold tracking-tight outline-none"
+		style="color: var(--color-ink);"></textarea>
 
-	<MarkdownEditor bind:value={content} />
+	<MarkdownEditor bind:this={editor} bind:value={content} bind:focused={editorFocused} />
 
 	<div
 		class="sticky bottom-0 -mx-4 flex flex-wrap items-center gap-1.5 px-4 pt-2 pb-2"
-		style="background: var(--color-bg);"
+		style="background: var(--color-bg); border-top: 1px solid var(--color-border);"
 	>
-		{#each tags as tag, i (tag.id ?? `new-${i}`)}
-			{#if editingTagIndex === i}
-				<span
-					class="flex items-center gap-1 rounded-full px-2.5 py-1 text-xs"
-					style="background: var(--color-accent-soft);"
-				>
-					<input
-						type="text"
-						bind:value={editTagValue}
-						use:focusAndSelect
-						onkeydown={(e) => {
-							if (e.key === 'Enter') {
-								e.preventDefault();
-								commitEditTag();
-							} else if (e.key === 'Escape') {
-								e.preventDefault();
-								cancelEditTag();
-							}
-						}}
-						onblur={commitEditTag}
-						class="w-16 bg-transparent outline-none"
-						style="color: var(--color-accent);"
-					/>
-				</span>
-			{:else}
-				<span
-					class="flex items-center gap-1 rounded-full py-1 pr-1.5 pl-2.5 text-xs"
-					style="background: var(--color-accent-soft); color: var(--color-accent);"
-				>
-					<button
-						onclick={() => startEditTag(i)}
-						class="max-w-32 truncate"
-						aria-label={`Edit tag ${tag.name}`}
+		{#if showToolbar}
+			<EditorToolbar onaction={(action) => editor?.applyFormat(action)} />
+		{:else}
+			{#each tags as tag, i (tag.id ?? `new-${i}`)}
+				{#if editingTagIndex === i}
+					<span
+						class="flex items-center gap-1 rounded-full px-2.5 py-1 text-xs"
+						style="background: var(--color-accent-soft);"
 					>
-						#{tag.name}
-					</button>
-					<button
-						onclick={() => removeTag(i)}
-						aria-label={`Remove tag ${tag.name}`}
-						class="flex h-3.5 w-3.5 items-center justify-center opacity-70"
+						<input
+							type="text"
+							bind:value={editTagValue}
+							use:focusAndSelect
+							onkeydown={(e) => {
+								if (e.key === 'Enter') {
+									e.preventDefault();
+									commitEditTag();
+								} else if (e.key === 'Escape') {
+									e.preventDefault();
+									cancelEditTag();
+								}
+							}}
+							onblur={commitEditTag}
+							class="w-16 bg-transparent outline-none"
+							style="color: var(--color-accent);"
+						/>
+					</span>
+				{:else}
+					<span
+						class="flex items-center gap-1 rounded-full py-1 pr-1.5 pl-2.5 text-xs"
+						style="background: var(--color-accent-soft); color: var(--color-accent);"
 					>
-						<span aria-hidden="true">×</span>
-					</button>
-				</span>
+						<button
+							onclick={() => startEditTag(i)}
+							class="max-w-32 truncate"
+							aria-label={`Edit tag ${tag.name}`}
+						>
+							#{tag.name}
+						</button>
+						<button
+							onclick={() => removeTag(i)}
+							aria-label={`Remove tag ${tag.name}`}
+							class="flex h-3.5 w-3.5 items-center justify-center opacity-70"
+						>
+							<span aria-hidden="true">×</span>
+						</button>
+					</span>
+				{/if}
+			{/each}
+			{#if tagError}
+				<span class="text-xs" style="color: var(--color-danger);">{tagError}</span>
 			{/if}
-		{/each}
-		{#if tagError}
-			<span class="text-xs" style="color: var(--color-danger);">{tagError}</span>
+			<input
+				type="text"
+				bind:value={tagInput}
+				onkeydown={(e) => {
+					if (e.key === 'Enter' || e.key === ',') {
+						e.preventDefault();
+						addTag();
+					}
+				}}
+				onblur={addTag}
+				placeholder={tags.length ? 'Add tag' : 'Add tags…'}
+				class="min-w-20 flex-1 bg-transparent py-1 text-xs outline-none"
+				style="color: var(--color-ink-muted);"
+			/>
 		{/if}
-		<input
-			type="text"
-			bind:value={tagInput}
-			onkeydown={(e) => {
-				if (e.key === 'Enter' || e.key === ',') {
-					e.preventDefault();
-					addTag();
-				}
-			}}
-			onblur={addTag}
-			placeholder={tags.length ? 'Add tag' : 'Add tags…'}
-			class="min-w-20 flex-1 bg-transparent py-1 text-xs outline-none"
-			style="color: var(--color-ink-muted);"
-		/>
 	</div>
 </div>

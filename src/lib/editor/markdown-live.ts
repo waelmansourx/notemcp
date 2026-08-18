@@ -8,7 +8,14 @@ import {
 	type DecorationSet,
 	type ViewUpdate
 } from '@codemirror/view';
-import { EditorState, Prec, type Range, type StateCommand } from '@codemirror/state';
+import {
+	EditorSelection,
+	EditorState,
+	Prec,
+	type ChangeSpec,
+	type Range,
+	type StateCommand
+} from '@codemirror/state';
 import { Language, defineLanguageFacet, languageDataProp, syntaxTree } from '@codemirror/language';
 import { parser as commonmarkParser, TaskList, Strikethrough, Autolink } from '@lezer/markdown';
 import { history, historyKeymap, defaultKeymap } from '@codemirror/commands';
@@ -276,6 +283,117 @@ export const continueList: StateCommand = ({ state, dispatch }) => {
 	return true;
 };
 
+// Whatever block marker a line already carries. The alternation is ordered
+// so that a task's `- [ ] ` is matched before the bare `- ` inside it.
+const BLOCK_RE = /^(\s*)(#{1,6}\s+|[-*+]\s+\[[ xX]\]\s+|[-*+]\s+|\d+[.)]\s+)?/;
+
+function classifyMarker(marker: string): string {
+	if (!marker) return 'none';
+	if (/^#{1,6}\s/.test(marker)) return `h${marker.trim().length}`;
+	if (/\[[ xX]\]/.test(marker)) return 'task';
+	if (/^\d/.test(marker)) return 'ordered';
+	return 'bullet';
+}
+
+// Applies a block marker across every line the selection touches, swapping
+// out whatever marker was there. Tapping the same button again clears it, so
+// each button is a toggle rather than a one-way conversion.
+function toggleBlock(kind: 'task' | 'bullet' | 'heading'): StateCommand {
+	return ({ state, dispatch }) => {
+		const changes: ChangeSpec[] = [];
+		const { from, to } = state.selection.main;
+
+		for (let n = state.doc.lineAt(from).number; n <= state.doc.lineAt(to).number; n++) {
+			const line = state.doc.line(n);
+			const match = line.text.match(BLOCK_RE);
+			const indent = match?.[1] ?? '';
+			const marker = match?.[2] ?? '';
+			const current = classifyMarker(marker);
+
+			let next: string;
+			if (kind === 'heading') {
+				// One button, two useful levels: plain → H1 → H2 → plain.
+				next = current === 'h1' ? '## ' : current === 'h2' ? '' : '# ';
+			} else if (kind === 'task') {
+				next = current === 'task' ? '' : '- [ ] ';
+			} else {
+				next = current === 'bullet' ? '' : '- ';
+			}
+
+			if (marker === next) continue;
+			const start = line.from + indent.length;
+			changes.push({ from: start, to: start + marker.length, insert: next });
+		}
+
+		if (!changes.length) return false;
+		dispatch(state.update({ changes, scrollIntoView: true }));
+		return true;
+	};
+}
+
+// Wraps the selection in `**`, or unwraps it when the delimiters are already
+// there. With no selection it inserts an empty pair and puts the caret
+// between them, so the button works as "start typing bold".
+const toggleBold: StateCommand = ({ state, dispatch }) => {
+	dispatch(
+		state.update(
+			state.changeByRange((range) => {
+				const wrapped =
+					state.sliceDoc(range.from - 2, range.from) === '**' &&
+					state.sliceDoc(range.to, range.to + 2) === '**';
+
+				if (wrapped) {
+					return {
+						changes: [
+							{ from: range.from - 2, to: range.from },
+							{ from: range.to, to: range.to + 2 }
+						],
+						range: EditorSelection.range(range.from - 2, range.to - 2)
+					};
+				}
+
+				const text = state.sliceDoc(range.from, range.to);
+				return {
+					changes: { from: range.from, to: range.to, insert: `**${text}**` },
+					range: EditorSelection.range(range.from + 2, range.to + 2)
+				};
+			}),
+			{ scrollIntoView: true }
+		)
+	);
+	return true;
+};
+
+// `[text](|)` when something is selected, `[|]()` when nothing is — either
+// way the caret lands where the next thing to type goes.
+const insertLink: StateCommand = ({ state, dispatch }) => {
+	dispatch(
+		state.update(
+			state.changeByRange((range) => {
+				const text = state.sliceDoc(range.from, range.to);
+				const insert = `[${text}]()`;
+				const caret = range.from + (text ? insert.length - 1 : 1);
+				return {
+					changes: { from: range.from, to: range.to, insert },
+					range: EditorSelection.cursor(caret)
+				};
+			}),
+			{ scrollIntoView: true }
+		)
+	);
+	return true;
+};
+
+export const formatCommands = {
+	task: toggleBlock('task'),
+	bullet: toggleBlock('bullet'),
+	heading: toggleBlock('heading'),
+	bold: toggleBold,
+	link: insertLink
+} satisfies Record<string, StateCommand>;
+
+export type FormatAction = keyof typeof formatCommands;
+
 const theme = EditorView.theme({
 	'&': {
 		color: 'var(--color-ink)',
@@ -356,6 +474,7 @@ export function createMarkdownEditor(options: {
 	doc: string;
 	placeholder?: string;
 	onChange: (value: string) => void;
+	onFocusChange?: (focused: boolean) => void;
 }): EditorView {
 	const view = new EditorView({
 		parent: options.parent,
@@ -384,6 +503,7 @@ export function createMarkdownEditor(options: {
 				}),
 				EditorView.updateListener.of((update) => {
 					if (update.docChanged) options.onChange(update.state.doc.toString());
+					if (update.focusChanged) options.onFocusChange?.(update.view.hasFocus);
 				})
 			]
 		})
