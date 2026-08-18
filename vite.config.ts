@@ -92,7 +92,10 @@ export default defineConfig({
 				}
 			} as any,
 			injectManifest: {
-				globPatterns: ['**/*.{js,css,html,png,svg,ico,webmanifest}']
+				// woff2 added for the self-hosted Newsreader/Inter files
+				// (static/fonts) — precached like everything else, so notes keep
+				// their fonts offline instead of falling back to system ones.
+				globPatterns: ['**/*.{js,css,html,png,svg,ico,webmanifest,woff2}']
 			}
 		})
 	]

@@ -8,12 +8,6 @@ export interface DayGroup {
 	/** Stable key for {#each} — the day's epoch ms. */
 	key: number;
 	label: string;
-	/**
-	 * Whether times are shown inline by default. Only today: further back, the
-	 * day heading carries all the temporal information most scrolling needs,
-	 * and a timestamp on every entry is 800 numbers doing nothing.
-	 */
-	showTimes: boolean;
 	notes: Note[];
 }
 
@@ -53,7 +47,7 @@ export function groupByDay(notes: Note[]): DayGroup[] {
 					year: date.getFullYear() === thisYear ? undefined : 'numeric'
 				});
 
-			return { key: day, label, showTimes: day === today, notes: dayNotes };
+			return { key: day, label, notes: dayNotes };
 		});
 }
 

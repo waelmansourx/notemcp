@@ -623,7 +623,7 @@
 			onkeydown={onKeydown}
 			rows="4"
 			placeholder="Write something…"
-			class="min-h-[calc(1.06rem*1.44*4)] w-full flex-auto resize-none overflow-y-auto bg-transparent text-[1.06rem] leading-[1.44] tracking-[-0.017em] outline-none"
+			class="font-serif min-h-[calc(1.06rem*1.44*4)] w-full flex-auto resize-none overflow-y-auto bg-transparent text-[1.06rem] leading-[1.44] tracking-[-0.017em] outline-none"
 		></textarea>
 
 		<div class="mt-2 flex shrink-0 items-center gap-2">

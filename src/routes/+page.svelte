@@ -49,12 +49,6 @@
 	// short stream with no reason given.
 	let showFilter = $derived(filter.open || activeTags.length > 0 || filter.q.trim().length > 0);
 	let filtering = $derived(activeTags.length > 0 || filter.q.trim().length > 0);
-
-	// Days the reader has explicitly asked to see times for.
-	let revealed = $state<number[]>([]);
-	function toggleDay(key: number) {
-		revealed = revealed.includes(key) ? revealed.filter((k) => k !== key) : [...revealed, key];
-	}
 </script>
 
 <svelte:head><title>NoteMCP</title></svelte:head>
@@ -77,14 +71,9 @@
 			</p>
 		{:else}
 			{#each groups as group (group.key)}
-				<DayHeading
-					label={group.label}
-					toggleable={!group.showTimes}
-					expanded={revealed.includes(group.key)}
-					ontoggle={() => toggleDay(group.key)}
-				/>
+				<DayHeading label={group.label} />
 				{#each group.notes as note (note.id)}
-					<Entry {note} showTime={group.showTimes || revealed.includes(group.key)} />
+					<Entry {note} showTime />
 				{/each}
 			{/each}
 		{/if}

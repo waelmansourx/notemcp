@@ -25,7 +25,7 @@
 		{/if}
 		<div class="min-w-0 flex-1">
 			<div class="flex items-start justify-between gap-3">
-				<h3 class="truncate text-[0.925rem] font-medium">{title}</h3>
+				<h3 class="font-serif truncate text-[0.925rem] font-medium">{title}</h3>
 				<div class="flex shrink-0 items-center gap-1.5 pt-0.5">
 					{#if note.pinned}
 						<span style="color: var(--color-ink-faint);" aria-label="Pinned">
@@ -43,7 +43,10 @@
 			</div>
 
 			{#if preview}
-				<p class="mt-0.5 line-clamp-2 text-sm leading-snug" style="color: var(--color-ink-muted);">
+				<p
+					class="font-serif mt-0.5 line-clamp-2 text-sm leading-snug"
+					style="color: var(--color-ink-muted);"
+				>
 					{preview}
 				</p>
 			{/if}

@@ -35,13 +35,15 @@
 		<div class="flex items-start gap-3.5">
 			<div class="min-w-0 flex-1">
 				{#if heading}
-					<h3 class="line-clamp-2 text-[0.97rem] leading-[1.34] font-semibold tracking-[-0.019em]">
+					<h3
+						class="font-serif line-clamp-2 text-[0.97rem] leading-[1.34] font-semibold tracking-[-0.019em]"
+					>
 						{heading}
 					</h3>
 				{/if}
 				{#if caption}
 					<p
-						class="mt-[5px] line-clamp-2 text-[0.905rem] leading-[1.4] tracking-[-0.012em]"
+						class="font-serif mt-[5px] line-clamp-2 text-[0.905rem] leading-[1.4] tracking-[-0.012em]"
 						style="color: var(--color-ink-2);"
 					>
 						{caption}
@@ -69,7 +71,7 @@
 			/>
 			{#if textOnly.trim()}
 				<p
-					class="line-clamp-3 min-w-0 flex-1 text-[1rem] leading-[1.44] tracking-[-0.016em] whitespace-pre-wrap"
+					class="font-serif line-clamp-3 min-w-0 flex-1 text-[1rem] leading-[1.44] tracking-[-0.016em] whitespace-pre-wrap"
 				>
 					{excerpt(textOnly, 200)}
 				</p>
@@ -78,7 +80,9 @@
 	{:else}
 		<!-- Clamped: a note is as long as it needs to be, but a *list* of notes
 		     is only useful if you can see more than one of them at a time. -->
-		<p class="line-clamp-6 text-[1rem] leading-[1.44] tracking-[-0.016em] whitespace-pre-wrap">
+		<p
+			class="font-serif line-clamp-6 text-[1rem] leading-[1.44] tracking-[-0.016em] whitespace-pre-wrap"
+		>
 			{body}
 		</p>
 	{/if}

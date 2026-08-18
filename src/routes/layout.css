@@ -24,7 +24,12 @@
 	--radius-md: 0.56rem;
 	--radius-lg: 0.88rem;
 
-	--font-sans: -apple-system, BlinkMacSystemFont, 'Inter', 'SF Pro Text', system-ui, sans-serif;
+	/* Both self-hosted below (src/lib/assets/fonts.css) — no Google Fonts
+	   request at runtime. System fonts trail as fallbacks for the split
+	   second before each downloads, and forever if it fails to. */
+	--font-sans:
+		'Inter Variable', -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+	--font-serif: 'Newsreader Variable', Georgia, 'Iowan Old Style', 'Times New Roman', serif;
 	--font-mono: 'SF Mono', ui-monospace, 'Menlo', monospace;
 }
 
@@ -94,7 +99,6 @@ textarea {
 	display: inline;
 	white-space: nowrap;
 	font-size: 0.75rem;
-	font-weight: 600;
 	letter-spacing: -0.01em;
 	color: var(--color-accent);
 }

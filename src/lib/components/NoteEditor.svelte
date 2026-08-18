@@ -500,7 +500,7 @@
 				editor?.focusEditor();
 			}
 		}}
-		class="mb-1.5 w-full resize-none overflow-hidden bg-transparent text-xl font-semibold tracking-tight outline-none"
+		class="font-serif mb-1.5 w-full resize-none overflow-hidden bg-transparent text-xl font-semibold tracking-tight outline-none"
 		style="color: var(--color-ink);"></textarea>
 
 	<MarkdownEditor bind:this={editor} bind:value={content} bind:focused={editorFocused} />

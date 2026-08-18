@@ -141,6 +141,7 @@
 
 	.cm-fallback,
 	.cm-host {
+		font-family: var(--font-serif);
 		font-size: 1rem;
 		line-height: 1.65;
 		white-space: pre-wrap;

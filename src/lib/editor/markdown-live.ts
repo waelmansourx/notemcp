@@ -443,7 +443,7 @@ const theme = EditorView.theme({
 	'&.cm-focused': { outline: 'none' },
 	'.cm-content': {
 		padding: '0',
-		fontFamily: 'var(--font-sans)',
+		fontFamily: 'var(--font-serif)',
 		lineHeight: '1.65',
 		caretColor: 'var(--color-accent)',
 		// Fill the shell so a tap anywhere in the blank area below a short
@@ -451,7 +451,7 @@ const theme = EditorView.theme({
 		minHeight: '100%'
 	},
 	'.cm-line': { padding: '0' },
-	'.cm-scroller': { fontFamily: 'var(--font-sans)', lineHeight: '1.65' },
+	'.cm-scroller': { fontFamily: 'var(--font-serif)', lineHeight: '1.65' },
 	'.cm-cursor, .cm-dropCursor': { borderLeftColor: 'var(--color-accent)' },
 	'.cm-placeholder': { color: 'var(--color-ink-faint)' },
 	'&.cm-focused .cm-selectionBackground, .cm-selectionBackground, ::selection': {
