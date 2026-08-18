@@ -20,8 +20,7 @@
 	--radius-lg: 1.75rem;
 	--radius-xl: 2.25rem;
 
-	--font-sans:
-		-apple-system, BlinkMacSystemFont, 'Inter', 'SF Pro Text', system-ui, sans-serif;
+	--font-sans: -apple-system, BlinkMacSystemFont, 'Inter', 'SF Pro Text', system-ui, sans-serif;
 	--font-mono: 'SF Mono', ui-monospace, 'Menlo', monospace;
 }
 
@@ -170,6 +169,22 @@ textarea {
 .prose-note img {
 	max-width: 100%;
 	border-radius: var(--radius-sm);
+}
+
+.prose-note li:has(> input[type='checkbox']) {
+	list-style: none;
+	display: flex;
+	align-items: baseline;
+	gap: 0.55em;
+}
+
+.prose-note li input[type='checkbox'] {
+	width: 1.05em;
+	height: 1.05em;
+	margin-top: 0.15em;
+	accent-color: var(--color-accent);
+	cursor: pointer;
+	flex-shrink: 0;
 }
 
 .hljs {

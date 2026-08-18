@@ -20,6 +20,36 @@ export function renderMarkdown(source: string): string {
 	return marked.parse(source, { async: false }) as string;
 }
 
+// GFM task-list checkboxes render `disabled` by default. Swap that for a
+// data-task-index so the editor's preview can make them tappable — turning
+// `- [ ]` lines into an actual todo list instead of static markup.
+export function renderMarkdownWithTasks(source: string): string {
+	const html = renderMarkdown(source);
+	if (!html) return html;
+	let i = 0;
+	return html.replace(/<input ([^>]*)type="checkbox">/g, (_match, attrs) => {
+		const cleaned = attrs.replace(/disabled=""\s*/, '').trim();
+		return `<input ${cleaned ? cleaned + ' ' : ''}type="checkbox" data-task-index="${i++}">`;
+	});
+}
+
+export const TASK_ITEM_RE = /^(\s*[-*+]\s+\[)([ xX])(\]\s)/;
+
+export function toggleTaskLine(markdown: string, index: number): string {
+	let count = -1;
+	return markdown
+		.split('\n')
+		.map((line) => {
+			const match = line.match(TASK_ITEM_RE);
+			if (!match) return line;
+			count++;
+			if (count !== index) return line;
+			const next = match[2] === ' ' ? 'x' : ' ';
+			return line.slice(0, match[1].length) + next + line.slice(match[1].length + 1);
+		})
+		.join('\n');
+}
+
 export function firstLine(markdown: string, max = 80): string {
 	const line = markdown
 		.split('\n')

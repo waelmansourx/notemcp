@@ -23,11 +23,22 @@ const supabase: Handle = async ({ event, resolve }) => {
 		} = await event.locals.supabase.auth.getSession();
 		if (!session) return { session: null, user: null };
 
-		const {
-			data: { user },
-			error
-		} = await event.locals.supabase.auth.getUser();
-		if (error) return { session: null, user: null };
+		// getClaims() verifies the JWT's signature locally (JWKS is fetched
+		// once and cached) instead of round-tripping to the Supabase auth
+		// server like getUser() does. Same security guarantee — the token is
+		// still cryptographically verified, not just decoded — but it cuts a
+		// network call out of every SSR request, which was the main thing
+		// standing between a cold PWA launch and first paint.
+		const { data, error } = await event.locals.supabase.auth.getClaims();
+		if (error || !data) return { session: null, user: null };
+
+		const claims = data.claims;
+		const user = {
+			...session.user,
+			id: claims.sub!,
+			email: claims.email ?? session.user.email,
+			role: claims.role ?? session.user.role
+		};
 
 		return { session, user };
 	};

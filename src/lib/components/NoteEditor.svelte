@@ -1,6 +1,7 @@
 <script lang="ts">
+	import { tick } from 'svelte';
 	import { goto } from '$app/navigation';
-	import { renderMarkdown } from '$lib/markdown';
+	import { renderMarkdownWithTasks, toggleTaskLine, TASK_ITEM_RE } from '$lib/markdown';
 	import { hostname } from '$lib/dates';
 	import type { Note } from '$lib/types';
 
@@ -24,11 +25,18 @@
 	let content = $state(existingNote?.content_markdown ?? prefill?.content_markdown ?? '');
 	let sourceUrl = $state(existingNote?.source_url ?? prefill?.source_url ?? null);
 	let linkTitle = $state(existingNote?.source_title ?? prefill?.source_title ?? null);
-	let linkDescription = $state(existingNote?.source_description ?? prefill?.source_description ?? null);
+	let linkDescription = $state(
+		existingNote?.source_description ?? prefill?.source_description ?? null
+	);
 	let linkImage = $state(existingNote?.source_image ?? prefill?.source_image ?? null);
 	let pinned = $state(existingNote?.pinned ?? false);
-	let tags = $state<string[]>(existingNote?.tags.map((t) => t.name) ?? []);
+	let tags = $state<{ id: string | null; name: string }[]>(
+		existingNote?.tags.map((t) => ({ id: t.id, name: t.name })) ?? []
+	);
 	let tagInput = $state('');
+	let editingTagIndex = $state<number | null>(null);
+	let editTagValue = $state('');
+	let tagError = $state('');
 	let showPreview = $state(false);
 	let saveState = $state<'idle' | 'saving' | 'saved'>('idle');
 	let deleting = $state(false);
@@ -38,7 +46,7 @@
 		title;
 		content;
 		pinned;
-		tags.length;
+		tags.map((t) => t.name).join(',');
 		if (!ready) {
 			ready = true;
 			return;
@@ -64,7 +72,7 @@
 					source_description: linkDescription,
 					source_image: linkImage,
 					pinned,
-					tagNames: tags
+					tagNames: tags.map((t) => t.name)
 				})
 			});
 			const note = await res.json();
@@ -74,7 +82,12 @@
 			await fetch(`/api/notes/${id}`, {
 				method: 'PATCH',
 				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ title, content_markdown: content, pinned, tagNames: tags })
+				body: JSON.stringify({
+					title,
+					content_markdown: content,
+					pinned,
+					tagNames: tags.map((t) => t.name)
+				})
 			});
 		}
 		saveState = 'saved';
@@ -82,12 +95,118 @@
 
 	function addTag() {
 		const t = tagInput.trim().toLowerCase().replace(/^#/, '');
-		if (t && !tags.includes(t)) tags = [...tags, t];
+		if (t && !tags.some((x) => x.name === t)) tags = [...tags, { id: null, name: t }];
 		tagInput = '';
 	}
 
-	function removeTag(t: string) {
-		tags = tags.filter((x) => x !== t);
+	function removeTag(index: number) {
+		tags = tags.filter((_, i) => i !== index);
+	}
+
+	function startEditTag(index: number) {
+		editingTagIndex = index;
+		editTagValue = tags[index].name;
+		tagError = '';
+	}
+
+	function cancelEditTag() {
+		editingTagIndex = null;
+		tagError = '';
+	}
+
+	async function commitEditTag() {
+		const index = editingTagIndex;
+		if (index === null) return;
+		const name = editTagValue.trim().toLowerCase().replace(/^#/, '');
+		const tag = tags[index];
+
+		if (!name) {
+			removeTag(index);
+			editingTagIndex = null;
+			return;
+		}
+		if (name === tag.name) {
+			editingTagIndex = null;
+			return;
+		}
+		if (tags.some((t, i) => i !== index && t.name === name)) {
+			tagError = 'Already tagged';
+			return;
+		}
+
+		if (tag.id) {
+			const res = await fetch(`/api/tags/${tag.id}`, {
+				method: 'PATCH',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ name })
+			});
+			if (!res.ok) {
+				tagError = res.status === 409 ? 'Already tagged' : 'Could not rename';
+				return;
+			}
+		}
+
+		tags = tags.map((t, i) => (i === index ? { ...t, name } : t));
+		editingTagIndex = null;
+		tagError = '';
+	}
+
+	function focusAndSelect(node: HTMLInputElement) {
+		node.focus();
+		node.select();
+	}
+
+	let isChecklist = $derived(
+		content.trim().length > 0 &&
+			content
+				.split('\n')
+				.filter((l) => l.trim())
+				.every((l) => TASK_ITEM_RE.test(l))
+	);
+
+	function toggleChecklist() {
+		const lines = content.split('\n');
+		if (isChecklist) {
+			content = lines.map((l) => l.replace(TASK_ITEM_RE, '')).join('\n');
+		} else {
+			const next = lines.map((l) => (l.trim() && !TASK_ITEM_RE.test(l) ? `- [ ] ${l.trim()}` : l));
+			content = next.join('\n').trim() || '- [ ] ';
+		}
+	}
+
+	async function handleContentKeydown(e: KeyboardEvent) {
+		if (e.key !== 'Enter') return;
+		const el = e.currentTarget as HTMLTextAreaElement;
+		const pos = el.selectionStart;
+		const before = content.slice(0, pos);
+		const after = content.slice(pos);
+		const lineStart = before.lastIndexOf('\n') + 1;
+		const currentLine = before.slice(lineStart);
+		const match = currentLine.match(TASK_ITEM_RE);
+		if (!match) return;
+
+		e.preventDefault();
+		const itemText = currentLine.slice(match[0].length);
+
+		if (itemText.trim() === '') {
+			content = content.slice(0, lineStart) + after;
+			await tick();
+			el.setSelectionRange(lineStart, lineStart);
+		} else {
+			const insertion = '\n- [ ] ';
+			content = before + insertion + after;
+			await tick();
+			el.setSelectionRange(pos + insertion.length, pos + insertion.length);
+		}
+	}
+
+	function handlePreviewClick(e: MouseEvent) {
+		const target = e.target as HTMLElement;
+		if (target.tagName !== 'INPUT' || target.getAttribute('type') !== 'checkbox') return;
+		const index = Number(target.getAttribute('data-task-index'));
+		if (Number.isNaN(index)) return;
+		content = toggleTaskLine(content, index);
+		persist();
 	}
 
 	async function togglePin() {
@@ -106,15 +225,25 @@
 </script>
 
 <div class="safe-top safe-bottom mx-auto flex min-h-screen max-w-2xl flex-col px-4 pb-10">
-	<header class="sticky top-0 z-10 -mx-4 flex items-center justify-between px-3 py-3" style="background: var(--color-bg);">
+	<header
+		class="sticky top-0 z-10 -mx-4 flex items-center justify-between px-3 py-3"
+		style="background: var(--color-bg);"
+	>
 		<button
 			onclick={() => goto('/')}
 			aria-label="Back"
 			class="flex h-9 w-9 items-center justify-center rounded-full"
 			style="color: var(--color-ink-muted);"
 		>
-			<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"
-				><path d="m15 18-6-6 6-6" /></svg
+			<svg
+				width="20"
+				height="20"
+				viewBox="0 0 24 24"
+				fill="none"
+				stroke="currentColor"
+				stroke-width="2.2"
+				stroke-linecap="round"
+				stroke-linejoin="round"><path d="m15 18-6-6 6-6" /></svg
 			>
 		</button>
 
@@ -130,9 +259,38 @@
 				class="flex h-9 w-9 items-center justify-center rounded-full"
 				style={`color: ${pinned ? 'var(--color-accent)' : 'var(--color-ink-muted)'};`}
 			>
-				<svg width="17" height="17" viewBox="0 0 24 24" fill={pinned ? 'currentColor' : 'none'} stroke="currentColor" stroke-width="1.8"
+				<svg
+					width="17"
+					height="17"
+					viewBox="0 0 24 24"
+					fill={pinned ? 'currentColor' : 'none'}
+					stroke="currentColor"
+					stroke-width="1.8"
 					><path
 						d="M14.5 2.5a1 1 0 0 1 1.4 0l5.6 5.6a1 1 0 0 1 0 1.4l-1.1 1.1a1 1 0 0 1-1.4 0l-.3-.3-3.2 3.2.7 2.9a1 1 0 0 1-.27.96l-.9.9a1 1 0 0 1-1.42 0l-3.6-3.6-4.6 4.6a1 1 0 0 1-1.42-1.42l4.6-4.6-3.6-3.6a1 1 0 0 1 0-1.42l.9-.9a1 1 0 0 1 .96-.27l2.9.7 3.2-3.2-.3-.3a1 1 0 0 1 0-1.4z"
+					/></svg
+				>
+			</button>
+			<button
+				onclick={toggleChecklist}
+				aria-label={isChecklist ? 'Turn off checklist' : 'Turn into checklist'}
+				aria-pressed={isChecklist}
+				class="flex h-9 w-9 items-center justify-center rounded-full"
+				style={isChecklist
+					? 'background: var(--color-accent-soft); color: var(--color-accent);'
+					: 'color: var(--color-ink-muted);'}
+			>
+				<svg
+					width="17"
+					height="17"
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="1.8"
+					stroke-linecap="round"
+					stroke-linejoin="round"
+					><path d="m4 6 1.5 1.5L8.5 4M4 12l1.5 1.5L8.5 10M4 18l1.5 1.5L8.5 16" /><path
+						d="M12 6h8M12 12h8M12 18h8"
 					/></svg
 				>
 			</button>
@@ -154,8 +312,18 @@
 					class="flex h-9 w-9 items-center justify-center rounded-full"
 					style="color: var(--color-ink-muted);"
 				>
-					<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
-						><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0-1 14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L4 6h16Z" /></svg
+					<svg
+						width="17"
+						height="17"
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="1.8"
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						><path
+							d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0-1 14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L4 6h16Z"
+						/></svg
 					>
 				</button>
 			{/if}
@@ -170,8 +338,18 @@
 			class="mb-3 inline-flex w-fit items-center gap-1.5 rounded-full px-3 py-1.5 text-xs"
 			style="background: var(--color-surface-2); color: var(--color-ink-muted);"
 		>
-			<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"
-				><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><path d="M15 3h6v6" /><path d="M10 14 21 3" /></svg
+			<svg
+				width="11"
+				height="11"
+				viewBox="0 0 24 24"
+				fill="none"
+				stroke="currentColor"
+				stroke-width="2.2"
+				stroke-linecap="round"
+				stroke-linejoin="round"
+				><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><path
+					d="M15 3h6v6"
+				/><path d="M10 14 21 3" /></svg
 			>
 			{hostname(sourceUrl)}
 		</a>
@@ -198,7 +376,10 @@
 					<p class="truncate text-sm font-medium" style="color: var(--color-ink);">{linkTitle}</p>
 				{/if}
 				{#if linkDescription}
-					<p class="mt-0.5 line-clamp-2 text-xs leading-snug" style="color: var(--color-ink-muted);">
+					<p
+						class="mt-0.5 line-clamp-2 text-xs leading-snug"
+						style="color: var(--color-ink-muted);"
+					>
 						{linkDescription}
 					</p>
 				{/if}
@@ -210,35 +391,78 @@
 		type="text"
 		bind:value={title}
 		placeholder="Title"
-		class="mb-2 w-full bg-transparent text-2xl font-semibold tracking-tight outline-none"
+		class="mb-1.5 w-full bg-transparent text-xl font-semibold tracking-tight outline-none"
 		style="color: var(--color-ink);"
 	/>
 
 	{#if showPreview}
-		<div class="prose-note pt-1 pb-10">
-			{@html renderMarkdown(content) || '<p style="color: var(--color-ink-faint)">Nothing to preview yet.</p>'}
+		<div class="prose-note pb-6" onclick={handlePreviewClick} role="presentation">
+			{@html renderMarkdownWithTasks(content) ||
+				'<p style="color: var(--color-ink-faint)">Nothing to preview yet.</p>'}
 		</div>
 	{:else}
 		<textarea
 			bind:value={content}
+			onkeydown={handleContentKeydown}
 			placeholder="Write something…"
 			rows="1"
-			class="w-full flex-1 resize-none bg-transparent pt-1 pb-10 text-[1rem] leading-relaxed outline-none"
-			style="color: var(--color-ink);"
-		></textarea>
+			class="w-full flex-1 resize-none bg-transparent pb-6 text-[1rem] leading-relaxed outline-none"
+			style="color: var(--color-ink);"></textarea>
 	{/if}
 
-	<div class="sticky bottom-0 -mx-4 flex flex-wrap items-center gap-2 px-4 pt-3 pb-2" style="background: var(--color-bg);">
-		{#each tags as tag (tag)}
-			<button
-				onclick={() => removeTag(tag)}
-				class="flex items-center gap-1 rounded-full px-2.5 py-1 text-xs"
-				style="background: var(--color-accent-soft); color: var(--color-accent);"
-			>
-				#{tag}
-				<span aria-hidden="true">×</span>
-			</button>
+	<div
+		class="sticky bottom-0 -mx-4 flex flex-wrap items-center gap-1.5 px-4 pt-2 pb-2"
+		style="background: var(--color-bg);"
+	>
+		{#each tags as tag, i (tag.id ?? `new-${i}`)}
+			{#if editingTagIndex === i}
+				<span
+					class="flex items-center gap-1 rounded-full px-2.5 py-1 text-xs"
+					style="background: var(--color-accent-soft);"
+				>
+					<input
+						type="text"
+						bind:value={editTagValue}
+						use:focusAndSelect
+						onkeydown={(e) => {
+							if (e.key === 'Enter') {
+								e.preventDefault();
+								commitEditTag();
+							} else if (e.key === 'Escape') {
+								e.preventDefault();
+								cancelEditTag();
+							}
+						}}
+						onblur={commitEditTag}
+						class="w-16 bg-transparent outline-none"
+						style="color: var(--color-accent);"
+					/>
+				</span>
+			{:else}
+				<span
+					class="flex items-center gap-1 rounded-full py-1 pr-1.5 pl-2.5 text-xs"
+					style="background: var(--color-accent-soft); color: var(--color-accent);"
+				>
+					<button
+						onclick={() => startEditTag(i)}
+						class="max-w-32 truncate"
+						aria-label={`Edit tag ${tag.name}`}
+					>
+						#{tag.name}
+					</button>
+					<button
+						onclick={() => removeTag(i)}
+						aria-label={`Remove tag ${tag.name}`}
+						class="flex h-3.5 w-3.5 items-center justify-center opacity-70"
+					>
+						<span aria-hidden="true">×</span>
+					</button>
+				</span>
+			{/if}
 		{/each}
+		{#if tagError}
+			<span class="text-xs" style="color: var(--color-danger);">{tagError}</span>
+		{/if}
 		<input
 			type="text"
 			bind:value={tagInput}

@@ -11,25 +11,25 @@
 
 <a
 	href={`/note/${note.id}`}
-	class="block rounded-[var(--radius-lg)] px-4 py-3.5 active:opacity-70"
+	class="block rounded-[var(--radius-lg)] px-3.5 py-2.5 active:opacity-70"
 	style="background: var(--color-surface); border: 1px solid var(--color-border);"
 >
-	<div class="flex items-start gap-3">
+	<div class="flex items-start gap-2.5">
 		{#if note.source_image}
 			<img
 				src={note.source_image}
 				alt=""
-				class="mt-0.5 h-11 w-11 shrink-0 rounded-[var(--radius-sm)] object-cover"
+				class="mt-0.5 h-9 w-9 shrink-0 rounded-[var(--radius-sm)] object-cover"
 				style="background: var(--color-surface-2);"
 			/>
 		{/if}
 		<div class="min-w-0 flex-1">
 			<div class="flex items-start justify-between gap-3">
-				<h3 class="truncate text-[0.975rem] font-medium">{title}</h3>
+				<h3 class="truncate text-[0.925rem] font-medium">{title}</h3>
 				<div class="flex shrink-0 items-center gap-1.5 pt-0.5">
 					{#if note.pinned}
 						<span style="color: var(--color-ink-faint);" aria-label="Pinned">
-							<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"
+							<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"
 								><path
 									d="M14.5 2.5a1 1 0 0 1 1.4 0l5.6 5.6a1 1 0 0 1 0 1.4l-1.1 1.1a1 1 0 0 1-1.4 0l-.3-.3-3.2 3.2.7 2.9a1 1 0 0 1-.27.96l-.9.9a1 1 0 0 1-1.42 0l-3.6-3.6-4.6 4.6a1 1 0 0 1-1.42-1.42l4.6-4.6-3.6-3.6a1 1 0 0 1 0-1.42l.9-.9a1 1 0 0 1 .96-.27l2.9.7 3.2-3.2-.3-.3a1 1 0 0 1 0-1.4z"
 								/></svg
@@ -43,13 +43,13 @@
 			</div>
 
 			{#if preview}
-				<p class="mt-1 line-clamp-2 text-sm leading-snug" style="color: var(--color-ink-muted);">
+				<p class="mt-0.5 line-clamp-2 text-sm leading-snug" style="color: var(--color-ink-muted);">
 					{preview}
 				</p>
 			{/if}
 
 			{#if note.tags.length > 0 || note.source_url}
-				<div class="mt-2.5 flex flex-wrap items-center gap-1.5">
+				<div class="mt-1.5 flex flex-wrap items-center gap-1.5">
 					{#if note.source_url}
 						<span
 							class="rounded-full px-2 py-0.5 text-[0.7rem]"
