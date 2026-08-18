@@ -51,8 +51,13 @@ export default defineConfig({
 				start_url: '/',
 				scope: '/',
 				display: 'standalone',
-				background_color: '#faf9f7',
-				theme_color: '#faf9f7',
+				// Matches layout.css's light --color-bg exactly. The manifest can
+				// only declare one background_color (no dark-mode media query),
+				// and the OS draws it full-screen before any app CSS runs — a
+				// mismatch here is what made the splash-to-app transition look
+				// like a slow, jarring flash rather than a fast handoff.
+				background_color: '#f4efe6',
+				theme_color: '#f4efe6',
 				icons: [
 					{ src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
 					{ src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },

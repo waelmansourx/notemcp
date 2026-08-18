@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { tick } from 'svelte';
 	import { goto } from '$app/navigation';
-	import { renderMarkdownWithTasks, toggleTaskLine, TASK_ITEM_RE } from '$lib/markdown';
+	import { toggleTaskLine, TASK_ITEM_RE } from '$lib/markdown';
 	import { hostname } from '$lib/dates';
 	import type { Note } from '$lib/types';
 
@@ -40,6 +40,18 @@
 	let showPreview = $state(false);
 	let saveState = $state<'idle' | 'saving' | 'saved'>('idle');
 	let deleting = $state(false);
+
+	// marked + highlight.js are ~40kB of extra JS that only the preview
+	// needs, so they're not in the editor's initial chunk — load them the
+	// first time the note actually has a preview to show.
+	let renderMarkdownWithTasks = $state<((source: string) => string) | null>(null);
+	$effect(() => {
+		if (showPreview && !renderMarkdownWithTasks) {
+			import('$lib/markdown-render').then((m) => {
+				renderMarkdownWithTasks = m.renderMarkdownWithTasks;
+			});
+		}
+	});
 
 	let ready = false;
 	$effect(() => {
@@ -397,7 +409,7 @@
 
 	{#if showPreview}
 		<div class="prose-note pb-6" onclick={handlePreviewClick} role="presentation">
-			{@html renderMarkdownWithTasks(content) ||
+			{@html (renderMarkdownWithTasks && renderMarkdownWithTasks(content)) ||
 				'<p style="color: var(--color-ink-faint)">Nothing to preview yet.</p>'}
 		</div>
 	{:else}

@@ -1,37 +1,9 @@
-import { Marked } from 'marked';
-import { markedHighlight } from 'marked-highlight';
-import hljs from 'highlight.js';
-
-const marked = new Marked(
-	markedHighlight({
-		emptyLangClass: 'hljs',
-		langPrefix: 'hljs language-',
-		highlight(code, lang) {
-			const language = hljs.getLanguage(lang) ? lang : 'plaintext';
-			return hljs.highlight(code, { language }).value;
-		}
-	})
-);
-
-marked.setOptions({ gfm: true, breaks: false });
-
-export function renderMarkdown(source: string): string {
-	if (!source.trim()) return '';
-	return marked.parse(source, { async: false }) as string;
-}
-
-// GFM task-list checkboxes render `disabled` by default. Swap that for a
-// data-task-index so the editor's preview can make them tappable — turning
-// `- [ ]` lines into an actual todo list instead of static markup.
-export function renderMarkdownWithTasks(source: string): string {
-	const html = renderMarkdown(source);
-	if (!html) return html;
-	let i = 0;
-	return html.replace(/<input ([^>]*)type="checkbox">/g, (_match, attrs) => {
-		const cleaned = attrs.replace(/disabled=""\s*/, '').trim();
-		return `<input ${cleaned ? cleaned + ' ' : ''}type="checkbox" data-task-index="${i++}">`;
-	});
-}
+// Pure, dependency-free text helpers. NoteCard and the note list import only
+// this file, so keep it free of marked/highlight.js — those are heavy (the
+// full highlight.js build alone is ~1MB) and previously rode along into the
+// list page's bundle just because renderMarkdown lived in the same module.
+// The actual HTML renderer lives in markdown-render.ts and is only imported
+// by the editor, which is the one place that needs it.
 
 export const TASK_ITEM_RE = /^(\s*[-*+]\s+\[)([ xX])(\]\s)/;
 

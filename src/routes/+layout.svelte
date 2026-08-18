@@ -34,8 +34,8 @@
 <svelte:head>
 	<link rel="icon" href={favicon} />
 	<link rel="manifest" href="/manifest.webmanifest" />
-	<meta name="theme-color" content="#faf9f7" media="(prefers-color-scheme: light)" />
-	<meta name="theme-color" content="#111110" media="(prefers-color-scheme: dark)" />
+	<meta name="theme-color" content="#f4efe6" media="(prefers-color-scheme: light)" />
+	<meta name="theme-color" content="#17140f" media="(prefers-color-scheme: dark)" />
 	<meta name="apple-mobile-web-app-capable" content="yes" />
 	<meta name="apple-mobile-web-app-status-bar-style" content="default" />
 	<meta name="apple-mobile-web-app-title" content="NoteMCP" />
