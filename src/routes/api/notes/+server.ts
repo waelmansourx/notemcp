@@ -16,7 +16,8 @@ export const POST: RequestHandler = async ({ request, locals: { supabase, user }
 		source_description: body.source_description,
 		source_image: body.source_image,
 		pinned: body.pinned,
-		tagNames: body.tagNames
+		tagNames: body.tagNames,
+		client_id: typeof body.client_id === 'string' ? body.client_id : null
 	});
 
 	return json(note, { status: 201 });

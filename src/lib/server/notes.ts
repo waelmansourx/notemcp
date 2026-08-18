@@ -42,9 +42,28 @@ export async function setNoteTags(
 	}
 
 	const all = [...(existing ?? []), ...created];
-	await supabase
-		.from('note_tags')
-		.insert(all.map((t) => ({ note_id: noteId, tag_id: t.id })));
+	await supabase.from('note_tags').insert(all.map((t) => ({ note_id: noteId, tag_id: t.id })));
+}
+
+async function withTags(supabase: SupabaseClient, noteId: string): Promise<Note> {
+	const { data } = await supabase.from('notes').select(NOTE_SELECT).eq('id', noteId).single();
+	if (!data) throw new Error('Note vanished immediately after being written');
+	return normalize(data);
+}
+
+/** Look a note up by the id its client generated, if it's already been stored. */
+async function findByClientId(
+	supabase: SupabaseClient,
+	userId: string,
+	clientId: string
+): Promise<Note | null> {
+	const { data } = await supabase
+		.from('notes')
+		.select(NOTE_SELECT)
+		.eq('user_id', userId)
+		.eq('client_id', clientId)
+		.maybeSingle();
+	return data ? normalize(data) : null;
 }
 
 export async function createNote(
@@ -60,12 +79,27 @@ export async function createNote(
 		source_image?: string | null;
 		pinned?: boolean;
 		tagNames?: string[];
+		client_id?: string | null;
 	}
 ): Promise<Note> {
-	const { data, error } = await supabase
+	// Capture is queued in localStorage and retried on the next app open, so
+	// the same note can legitimately be POSTed more than once — the share
+	// sheet navigates away before the first response lands, which is exactly
+	// how every shared link ended up saved twice. Carrying the client's own id
+	// through to a unique index makes the write idempotent: a retry resolves
+	// to the row the first attempt already created.
+	const clientId = input.client_id ?? null;
+
+	if (clientId) {
+		const existing = await findByClientId(supabase, userId, clientId);
+		if (existing) return existing;
+	}
+
+	const { data, error: insertError } = await supabase
 		.from('notes')
 		.insert({
 			user_id: userId,
+			client_id: clientId,
 			title: input.title ?? '',
 			content_markdown: input.content_markdown ?? '',
 			source_url: input.source_url ?? null,
@@ -75,15 +109,22 @@ export async function createNote(
 			source_image: input.source_image ?? null,
 			pinned: input.pinned ?? false
 		})
-		.select('*')
+		.select('id')
 		.single();
 
-	if (error || !data) throw error;
+	if (insertError || !data) {
+		// 23505 is the unique index on (user_id, client_id): a concurrent
+		// retry won the race, so its row is the answer we owe the caller.
+		if (clientId && insertError?.code === '23505') {
+			const existing = await findByClientId(supabase, userId, clientId);
+			if (existing) return existing;
+		}
+		throw insertError ?? new Error('Could not create note');
+	}
 
 	if (input.tagNames && input.tagNames.length > 0) {
 		await setNoteTags(supabase, userId, data.id, input.tagNames);
 	}
 
-	const { data: full } = await supabase.from('notes').select(NOTE_SELECT).eq('id', data.id).single();
-	return normalize(full);
+	return withTags(supabase, data.id);
 }

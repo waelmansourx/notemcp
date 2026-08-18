@@ -17,6 +17,13 @@ export interface DayGroup {
 	notes: Note[];
 }
 
+/** The moment the stream sorts and groups by. A note you edited today belongs
+ *  under Today — where you'll look for it — not under the day you first had
+ *  the thought. */
+export function streamDate(note: Note): string {
+	return note.updated_at || note.created_at;
+}
+
 export function groupByDay(notes: Note[]): DayGroup[] {
 	const today = startOfDay(new Date());
 	const yesterday = today - 86_400_000;
@@ -25,7 +32,7 @@ export function groupByDay(notes: Note[]): DayGroup[] {
 
 	const buckets = new Map<number, Note[]>();
 	for (const note of notes) {
-		const day = startOfDay(new Date(note.created_at));
+		const day = startOfDay(new Date(streamDate(note)));
 		const bucket = buckets.get(day);
 		if (bucket) bucket.push(note);
 		else buckets.set(day, [note]);

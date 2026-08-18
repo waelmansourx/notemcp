@@ -14,6 +14,11 @@
 	--color-accent-ink: #ffffff;
 	--color-danger: #96393c;
 	--color-danger-soft: #f7ecec;
+	/* The share sheet's confirmation state. These were referenced by
+	   /capture but never defined, so the "Saved" checkmark was drawn in
+	   transparent-on-transparent — i.e. invisible. */
+	--color-success: #1b5741;
+	--color-success-soft: #dfeee6;
 
 	--radius-sm: 0.44rem;
 	--radius-md: 0.56rem;
@@ -38,6 +43,8 @@
 		--color-accent-ink: #10201a;
 		--color-danger: #e0827f;
 		--color-danger-soft: #2e1e1e;
+		--color-success: #5fbf95;
+		--color-success-soft: #17301f;
 	}
 }
 
@@ -76,90 +83,25 @@ textarea {
 }
 
 /* ---------------------------------------------------------------
-   Tag chips.
+   Tags.
 
-   One neutral default. Colour is opt-in per tag (tags.color), so a
-   library of fifty tags stays legible instead of turning into a
-   rainbow taxonomy. Every pair below clears 4.5:1 on its own tint.
+   Not a pill, not a badge — just the word in the accent colour, the way
+   you'd write it in a sentence. The old chip put a filled capsule around
+   every tag, which made a note with three tags read as a row of buttons
+   competing with the thought itself.
    --------------------------------------------------------------- */
 .tag {
-	display: inline-flex;
-	align-items: center;
+	display: inline;
 	white-space: nowrap;
-	font-size: 0.72rem;
+	font-size: 0.75rem;
 	font-weight: 600;
 	letter-spacing: -0.01em;
-	padding: 0.19rem 0.5rem;
-	border-radius: var(--radius-sm);
-	background: var(--color-surface-2);
-	color: var(--color-ink-muted);
+	color: var(--color-accent);
 }
 .tag-lg {
-	font-size: 0.95rem;
+	font-size: 1rem;
 	font-weight: 640;
 	letter-spacing: -0.022em;
-	padding: 0.19rem 0.56rem;
-	border-radius: var(--radius-md);
-}
-
-.tag-green {
-	background: #e2ede6;
-	color: #1c5540;
-}
-.tag-indigo {
-	background: #e5e7f2;
-	color: #3a4179;
-}
-.tag-amber {
-	background: #f2e9d6;
-	color: #6e4c12;
-}
-.tag-rose {
-	background: #f4e5e9;
-	color: #7e3349;
-}
-.tag-slate {
-	background: #e6e9ed;
-	color: #3a4b58;
-}
-.tag-teal {
-	background: #dfedec;
-	color: #1d5454;
-}
-.tag-violet {
-	background: #eee6f1;
-	color: #57376a;
-}
-
-@media (prefers-color-scheme: dark) {
-	.tag-green {
-		background: #1a2c24;
-		color: #86c9a8;
-	}
-	.tag-indigo {
-		background: #1e2033;
-		color: #9ba4dd;
-	}
-	.tag-amber {
-		background: #2e2718;
-		color: #d3b078;
-	}
-	.tag-rose {
-		background: #301f24;
-		color: #d5949f;
-	}
-	.tag-slate {
-		background: #202629;
-		color: #9db0bd;
-	}
-	.tag-teal {
-		background: #172a2a;
-		color: #83bdba;
-	}
-	.tag-violet {
-		background: #271e2c;
-		color: #bb9ecb;
-	}
 }
 
 /* Hairline separator between stream entries. */

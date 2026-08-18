@@ -1,9 +1,10 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import MarkdownEditor from '$lib/components/MarkdownEditor.svelte';
 	import EditorToolbar from '$lib/components/EditorToolbar.svelte';
-	import { TASK_ITEM_RE } from '$lib/markdown';
 	import { hostname } from '$lib/dates';
+	import { clearDraft, isNewerThan, pruneDrafts, readDraft, saveDraft } from '$lib/draft.svelte';
 	import type { Note } from '$lib/types';
 
 	let {
@@ -81,56 +82,185 @@
 		};
 	});
 
-	let ready = false;
+	/*
+	 * Autosave.
+	 *
+	 * The old version fired 600ms after every keystroke and re-sent the whole
+	 * note each time — including `tagNames`, which the API implements as
+	 * "delete every note_tags row, then re-insert them". Typing a sentence
+	 * therefore rewrote the note's tags several times over.
+	 *
+	 * Now the text is written to localStorage on every change, synchronously,
+	 * so it is never at risk while we wait. That buys a much longer idle
+	 * window before the network write — plus a snapshot of what the server
+	 * last confirmed, so an unchanged note never writes at all, and a PATCH
+	 * body containing only the fields that actually moved.
+	 */
+	const AUTOSAVE_MS = 5000;
+
+	type Snapshot = { title: string; content: string; pinned: boolean; tags: string };
+
+	function snapshot(): Snapshot {
+		// \u0000 can't appear in a tag name, so joining on it can't collide.
+		return { title, content, pinned, tags: tags.map((t) => t.name).join('\u0000') };
+	}
+
+	function same(a: Snapshot, b: Snapshot): boolean {
+		return (
+			a.title === b.title && a.content === b.content && a.pinned === b.pinned && a.tags === b.tags
+		);
+	}
+
+	// Deliberately not $state: this is a record of what the server has, not
+	// something the UI renders, and keeping it out of the graph stops the
+	// autosave effect from re-running on its own result.
+	let saved: Snapshot | null = existingNote ? snapshot() : null;
+	// Stable for the life of this editor, so a note that hasn't been created
+	// yet still has somewhere consistent to keep its draft.
+	const clientId = crypto.randomUUID();
+	let inFlight = false;
+	let queuedAgain = false;
+
+	/** Where this note's local draft lives. A note being written for the first
+	 *  time has no id yet, so it borrows its client id. */
+	let draftKey = $derived(id ?? clientId);
+
 	$effect(() => {
-		title;
-		content;
-		pinned;
-		tags.map((t) => t.name).join(',');
-		if (!ready) {
-			ready = true;
+		const next = snapshot();
+		if (saved && same(saved, next)) return;
+
+		// Synchronous and immediate: whatever happens next — a dead network, a
+		// backgrounded tab, a browser that decides to reclaim the page — the
+		// words are already on the disk.
+		saveDraft(draftKey, {
+			title: next.title,
+			content: next.content,
+			tags: tags.map((t) => t.name)
+		});
+
+		const timer = setTimeout(persist, AUTOSAVE_MS);
+		return () => clearTimeout(timer);
+	});
+
+	/*
+	 * Recover anything a previous visit didn't manage to send — but exactly
+	 * once, on mount, and deliberately outside the reactive graph. An effect
+	 * that both reads the note's text and writes it re-runs on every keystroke,
+	 * and would race the autosave effect for the same localStorage key: one
+	 * writing the draft, the other deciding it was redundant and deleting it.
+	 */
+	onMount(() => {
+		pruneDrafts();
+		if (!existingNote) return;
+
+		const draft = readDraft(existingNote.id);
+		if (!draft) return;
+
+		const stale = !isNewerThan(draft, existingNote.updated_at);
+		const redundant = draft.content === content && draft.title === title;
+		if (stale || redundant) {
+			clearDraft(existingNote.id);
 			return;
 		}
-		const timer = setTimeout(persist, 600);
-		return () => clearTimeout(timer);
+
+		title = draft.title;
+		content = draft.content;
+		tags = draft.tags.map((name) => ({ id: null, name }));
+	});
+
+	// Leaving the page shouldn't cost you the last sentence you typed — on
+	// mobile, backgrounding the app is the usual way a note gets abandoned
+	// mid-edit, and `visibilitychange` is the only event that reliably fires
+	// for it.
+	$effect(() => {
+		function flush() {
+			if (document.visibilityState === 'hidden') persist();
+		}
+		document.addEventListener('visibilitychange', flush);
+		return () => document.removeEventListener('visibilitychange', flush);
 	});
 
 	async function persist() {
 		if (!title.trim() && !content.trim()) return;
+
+		const next = snapshot();
+		if (saved && same(saved, next)) return;
+
+		// A save is already out. Don't race it — note that another is owed and
+		// let the in-flight one start it on the way out.
+		if (inFlight) {
+			queuedAgain = true;
+			return;
+		}
+		inFlight = true;
 		saveState = 'saving';
 
-		if (!id) {
-			const res = await fetch('/api/notes', {
-				method: 'POST',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({
-					title,
-					content_markdown: content,
-					source_url: sourceUrl,
-					source_type: sourceUrl ? 'share' : 'manual',
-					source_title: linkTitle,
-					source_description: linkDescription,
-					source_image: linkImage,
-					pinned,
-					tagNames: tags.map((t) => t.name)
-				})
-			});
-			const note = await res.json();
-			id = note.id;
-			history.replaceState(history.state, '', `/note/${id}`);
-		} else {
-			await fetch(`/api/notes/${id}`, {
-				method: 'PATCH',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({
-					title,
-					content_markdown: content,
-					pinned,
-					tagNames: tags.map((t) => t.name)
-				})
-			});
+		try {
+			if (!id) {
+				const res = await fetch('/api/notes', {
+					method: 'POST',
+					headers: { 'content-type': 'application/json' },
+					body: JSON.stringify({
+						client_id: clientId,
+						title: next.title,
+						content_markdown: next.content,
+						source_url: sourceUrl,
+						source_type: sourceUrl ? 'share' : 'manual',
+						source_title: linkTitle,
+						source_description: linkDescription,
+						source_image: linkImage,
+						pinned: next.pinned,
+						tagNames: tags.map((t) => t.name)
+					})
+				});
+				if (!res.ok) {
+					saveState = 'idle';
+					return;
+				}
+				const note = await res.json();
+				// The draft moves with the note: it was filed under the client id
+				// until the server gave us a real one.
+				clearDraft(clientId);
+				id = note.id;
+				history.replaceState(history.state, '', `/note/${id}`);
+			} else {
+				const body: Record<string, unknown> = {};
+				if (!saved || saved.title !== next.title) body.title = next.title;
+				if (!saved || saved.content !== next.content) body.content_markdown = next.content;
+				if (!saved || saved.pinned !== next.pinned) body.pinned = next.pinned;
+				// Sending tagNames rewrites every note_tags row for this note, so
+				// it only goes out when the tags themselves have changed.
+				if (!saved || saved.tags !== next.tags) body.tagNames = tags.map((t) => t.name);
+
+				if (Object.keys(body).length > 0) {
+					const res = await fetch(`/api/notes/${id}`, {
+						method: 'PATCH',
+						headers: { 'content-type': 'application/json' },
+						body: JSON.stringify(body)
+					});
+					if (!res.ok) {
+						saveState = 'idle';
+						return;
+					}
+				}
+			}
+
+			saved = next;
+			// The server has it now, so the crash mat isn't holding anything the
+			// server isn't.
+			clearDraft(draftKey);
+			saveState = 'saved';
+		} catch {
+			// Offline or the request died. Leave `saved` alone so the next
+			// change (or the next visibility flush) tries again.
+			saveState = 'idle';
+		} finally {
+			inFlight = false;
+			if (queuedAgain) {
+				queuedAgain = false;
+				persist();
+			}
 		}
-		saveState = 'saved';
 	}
 
 	function addTag() {
@@ -196,26 +326,16 @@
 		node.select();
 	}
 
-	let isChecklist = $derived(
-		content.trim().length > 0 &&
-			content
-				.split('\n')
-				.filter((l) => l.trim())
-				.every((l) => TASK_ITEM_RE.test(l))
-	);
-
-	function toggleChecklist() {
-		const lines = content.split('\n');
-		if (isChecklist) {
-			content = lines.map((l) => l.replace(TASK_ITEM_RE, '')).join('\n');
-		} else {
-			const next = lines.map((l) => (l.trim() && !TASK_ITEM_RE.test(l) ? `- [ ] ${l.trim()}` : l));
-			content = next.join('\n').trim() || '- [ ] ';
-		}
-	}
-
 	async function togglePin() {
 		pinned = !pinned;
+	}
+
+	/** Going back shouldn't cost you the sentence you were in the middle of —
+	 *  but it shouldn't wait on the network either. The request outlives this
+	 *  component, and the local draft covers it if it doesn't. */
+	function leaveEditor() {
+		persist();
+		goto('/');
 	}
 
 	async function deleteNote() {
@@ -235,7 +355,7 @@
 		style="background: var(--color-bg);"
 	>
 		<button
-			onclick={() => goto('/')}
+			onclick={leaveEditor}
 			aria-label="Back"
 			class="flex h-9 w-9 items-center justify-center rounded-full"
 			style="color: var(--color-ink-muted);"
@@ -273,29 +393,6 @@
 					stroke-width="1.8"
 					><path
 						d="M14.5 2.5a1 1 0 0 1 1.4 0l5.6 5.6a1 1 0 0 1 0 1.4l-1.1 1.1a1 1 0 0 1-1.4 0l-.3-.3-3.2 3.2.7 2.9a1 1 0 0 1-.27.96l-.9.9a1 1 0 0 1-1.42 0l-3.6-3.6-4.6 4.6a1 1 0 0 1-1.42-1.42l4.6-4.6-3.6-3.6a1 1 0 0 1 0-1.42l.9-.9a1 1 0 0 1 .96-.27l2.9.7 3.2-3.2-.3-.3a1 1 0 0 1 0-1.4z"
-					/></svg
-				>
-			</button>
-			<button
-				onclick={toggleChecklist}
-				aria-label={isChecklist ? 'Turn off checklist' : 'Turn into checklist'}
-				aria-pressed={isChecklist}
-				class="flex h-9 w-9 items-center justify-center rounded-full"
-				style={isChecklist
-					? 'background: var(--color-accent-soft); color: var(--color-accent);'
-					: 'color: var(--color-ink-muted);'}
-			>
-				<svg
-					width="17"
-					height="17"
-					viewBox="0 0 24 24"
-					fill="none"
-					stroke="currentColor"
-					stroke-width="1.8"
-					stroke-linecap="round"
-					stroke-linejoin="round"
-					><path d="m4 6 1.5 1.5L8.5 4M4 12l1.5 1.5L8.5 10M4 18l1.5 1.5L8.5 16" /><path
-						d="M12 6h8M12 12h8M12 18h8"
 					/></svg
 				>
 			</button>

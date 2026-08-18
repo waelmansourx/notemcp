@@ -1,15 +1,14 @@
-import type { TagColor } from './tags';
-
 export interface Tag {
 	id: string;
 	name: string;
-	/** Opt-in; null means the neutral chip. */
-	color?: TagColor | string | null;
 }
 
 export interface Note {
 	id: string;
 	user_id: string;
+	/** The id the capturing client generated, when there was one. Lets a
+	 *  locally-queued note be matched to its saved row without guessing. */
+	client_id?: string | null;
 	title: string;
 	content_markdown: string;
 	source_url: string | null;

@@ -68,12 +68,10 @@
 		view.dispatch({ selection: { anchor: view.state.doc.length } });
 	}
 
-	// Reconcile edits made to `value` from outside the editor (the checklist
-	// toggle in the header rewrites the whole document). Guarded on an actual
-	// difference so the editor's own changes don't loop back into it, and
-	// skipped entirely while the editor has focus — the only external writer
-	// is a header button, which always blurs the editor first, so this only
-	// ever needs to run against a doc the user isn't actively typing into.
+	// Reconcile edits made to `value` from outside the editor. Guarded on an
+	// actual difference so the editor's own changes don't loop back into it,
+	// and skipped entirely while the editor has focus — external writes only
+	// ever arrive while the user isn't typing.
 	// The diff is trimmed to its changed middle rather than replacing the
 	// whole document: a single from-0-to-end change maps every existing
 	// selection into the replacement, which is what was throwing the caret

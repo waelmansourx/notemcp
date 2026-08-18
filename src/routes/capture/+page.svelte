@@ -4,7 +4,8 @@
 	import { onMount } from 'svelte';
 	import { hostname } from '$lib/dates';
 	import { QUICK_TAGS } from '$lib/types';
-	import { queueNote, syncEntry, syncEntryNow } from '$lib/outbox';
+	import { queueNote, syncEntryNow } from '$lib/outbox';
+	import { addPending, removePending } from '$lib/stream.svelte';
 	import { fly, fade } from 'svelte/transition';
 	import { quintOut } from 'svelte/easing';
 
@@ -109,9 +110,12 @@
 	// to "/" first (replacing this history entry) before trying, so that if
 	// the OS kills the process before close() lands, relaunching the app
 	// resumes on the home river instead of a dead capture screen.
-	async function leave() {
-		dismissed = true;
+	async function leave(sending?: Promise<unknown>) {
 		await goto('/', { replaceState: true, noScroll: true });
+		dismissed = true;
+		// Closing the tab aborts anything still in flight, so that — and only
+		// that — waits for the upload. The sheet is already gone by then.
+		if (sending) await sending.catch(() => {});
 		window.close();
 	}
 
@@ -131,17 +135,20 @@
 			tagNames
 		});
 
-		if (sharedImageDataUrl) {
-			// The embedded image can be well over keepalive's safe size, so
-			// wait for the real upload rather than firing-and-leaving.
-			syncEntryNow(entry).then(leave);
-		} else {
-			// localStorage write above is already durable, and the POST goes
-			// out with keepalive, so there's nothing left to wait on — just a
-			// beat for the checkmark to register before the sheet closes.
-			syncEntry(entry);
-			setTimeout(leave, 150);
-		}
+		// The note is durable in localStorage the moment queueNote() returns,
+		// and the server now keys on client_id so a retry can't duplicate it.
+		// Nothing about the round trip is worth standing still for: show it in
+		// the stream and go. Waiting on the upload here — which is what the
+		// image path used to do — is what made saving a shared photo feel like
+		// the app had hung.
+		addPending(entry);
+		leave(
+			syncEntryNow(entry).then((noteId) => {
+				// Once it's on the server the stream will load it for real, so the
+				// local stand-in has done its job.
+				if (noteId) removePending(entry.client_id);
+			})
+		);
 	}
 
 	function openInEditor() {
@@ -167,7 +174,7 @@
 		class="fixed inset-0 z-40 flex flex-col justify-end"
 		style="background: rgba(10, 10, 8, 0.5);"
 		transition:fade={{ duration: 200 }}
-		onclick={leave}
+		onclick={() => leave()}
 		role="presentation"
 	>
 		<div
@@ -182,7 +189,7 @@
 
 			<div class="relative flex shrink-0 items-center justify-center pt-1 pb-3">
 				<button
-					onclick={leave}
+					onclick={() => leave()}
 					aria-label="Close"
 					class="absolute left-0 flex h-10 w-10 items-center justify-center rounded-[var(--radius-md)]"
 					style="background: var(--color-surface); color: var(--color-ink); box-shadow: 0 1px 2px rgba(0,0,0,0.06);"

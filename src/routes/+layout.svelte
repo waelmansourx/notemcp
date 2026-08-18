@@ -28,7 +28,21 @@
 		// server (e.g. offline at share time).
 		flushOutbox();
 
-		return () => subscription.unsubscribe();
+		// CodeMirror is the heaviest chunk in the app and is loaded on demand
+		// when a note is opened, which put a visible pause on the first tap of
+		// every session. Fetching it once the stream has settled means that tap
+		// resolves against a warm cache instead of a cold network request.
+		const warm =
+			typeof requestIdleCallback === 'function'
+				? requestIdleCallback(() => {
+						import('$lib/editor/markdown-live');
+					})
+				: null;
+
+		return () => {
+			if (warm !== null) cancelIdleCallback(warm);
+			subscription.unsubscribe();
+		};
 	});
 </script>
 

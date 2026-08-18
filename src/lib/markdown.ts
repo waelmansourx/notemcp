@@ -27,11 +27,32 @@ export function extractLeadingImage(markdown: string): { image: string | null; r
 }
 
 export function snippet(markdown: string, max = 140): string {
-	const text = markdown
+	const text = plainText(markdown);
+	return text.length > max ? text.slice(0, max - 1) + '…' : text;
+}
+
+/** Markdown reduced to readable prose on one line. Images go first and whole:
+ *  an embedded photo is a base64 data URL running to megabytes, and putting
+ *  one of those in a list row is how the tags page came to render several
+ *  megabytes of text and fall over. */
+export function plainText(markdown: string): string {
+	return markdown
 		.replace(/```[\s\S]*?```/g, ' ')
+		.replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+		.replace(/\[(.*?)\]\([^)]*\)/g, '$1')
 		.replace(/[#>*_`~-]/g, ' ')
-		.replace(/\[(.*?)\]\(.*?\)/g, '$1')
 		.replace(/\s+/g, ' ')
 		.trim();
-	return text.length > max ? text.slice(0, max - 1) + '…' : text;
+}
+
+/** A note's own text, kept multi-line but cut to what a stream row can hold.
+ *  Line breaks survive — the shape of a list is part of how you recognise a
+ *  note at a glance — but the tail of a long note doesn't belong in a list of
+ *  many notes. */
+export function excerpt(markdown: string, max = 320): string {
+	const text = markdown.replace(/!\[[^\]]*\]\([^)]*\)/g, '').trim();
+	if (text.length <= max) return text;
+	const cut = text.slice(0, max);
+	const wrap = Math.max(cut.lastIndexOf(' '), cut.lastIndexOf('\n'));
+	return (wrap > max * 0.6 ? cut.slice(0, wrap) : cut).trimEnd() + '…';
 }

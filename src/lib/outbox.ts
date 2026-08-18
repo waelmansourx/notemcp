@@ -57,6 +57,9 @@ export function removeFromOutbox(clientId: string) {
 
 async function send(entry: OutboxEntry): Promise<{ id: string } | null> {
 	const payload = JSON.stringify({
+		// The server keys on this to make a retry resolve to the row the first
+		// attempt already wrote, rather than creating a second copy.
+		client_id: entry.client_id,
 		title: entry.title,
 		content_markdown: entry.content_markdown,
 		source_url: entry.source_url,
@@ -81,13 +84,21 @@ async function send(entry: OutboxEntry): Promise<{ id: string } | null> {
 }
 
 /** Fire the sync in the background; caller doesn't need to await this. */
-export function syncEntry(entry: OutboxEntry, onSynced?: (id: string) => void) {
+export function syncEntry(
+	entry: OutboxEntry,
+	onSynced?: (id: string) => void,
+	onQueued?: () => void
+) {
 	send(entry).then((note) => {
 		if (note) {
 			removeFromOutbox(entry.client_id);
 			onSynced?.(note.id);
+		} else {
+			// Left queued; flushOutbox() retries on the next app open. Worth
+			// saying out loud, because the note is on screen either way and
+			// silence would read as "synced".
+			onQueued?.();
 		}
-		// else: leave it queued, flushOutbox() will retry next app open.
 	});
 }
 
@@ -98,9 +109,23 @@ export async function syncEntryNow(entry: OutboxEntry): Promise<string | null> {
 	return note?.id ?? null;
 }
 
+// An entry that has failed to send for this long is never going to. Without a
+// ceiling it would be retried on every app open forever, and sit in
+// localStorage taking up room a real capture might need.
+const STALE_AFTER_MS = 14 * 24 * 60 * 60 * 1000;
+
 /** Retry anything left over from a previous session (e.g. was offline). */
 export async function flushOutbox(): Promise<void> {
+	const cutoff = Date.now() - STALE_AFTER_MS;
+
 	for (const entry of readOutbox()) {
+		if (new Date(entry.queued_at).getTime() < cutoff) {
+			removeFromOutbox(entry.client_id);
+			continue;
+		}
+		// Safe to re-send: the server keys on client_id, so a note that
+		// actually made it out the first time resolves to its existing row
+		// rather than being duplicated.
 		const note = await send(entry);
 		if (note) removeFromOutbox(entry.client_id);
 	}

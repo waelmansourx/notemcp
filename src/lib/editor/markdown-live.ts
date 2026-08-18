@@ -509,6 +509,49 @@ const theme = EditorView.theme({
 	}
 });
 
+/**
+ * Keep the caret on screen while typing.
+ *
+ * CodeMirror scrolls its own scroller, but this editor has no height of its
+ * own — the page scrolls. Combined with a software keyboard covering the
+ * bottom of the window and a toolbar pinned above it, pressing Enter could
+ * leave the new line underneath both, so you'd type blind and have to scroll
+ * by hand to see what you'd written. The visual viewport is the only thing
+ * that knows where the keyboard actually ends, so the check is made against
+ * that and the page is nudged just far enough.
+ */
+const CARET_MARGIN = 104;
+
+const keepCaretVisible = EditorView.updateListener.of((update) => {
+	if (!update.docChanged && !update.selectionSet) return;
+	if (!update.view.hasFocus) return;
+
+	// After the DOM has been written, or the coordinates describe the layout
+	// as it was before this change.
+	requestAnimationFrame(() => {
+		const view = update.view;
+		if (!view.dom.isConnected || !view.hasFocus) return;
+
+		const caret = view.coordsAtPos(view.state.selection.main.head);
+		if (!caret) return;
+
+		const vv = window.visualViewport;
+		const top = vv ? vv.offsetTop : 0;
+		const bottom = top + (vv ? vv.height : window.innerHeight);
+
+		const below = caret.bottom - (bottom - CARET_MARGIN);
+		if (below > 0) {
+			window.scrollBy({ top: below, behavior: 'smooth' });
+			return;
+		}
+
+		// The title field and the sticky header live up here, so the caret
+		// needs clearance at the top too.
+		const above = caret.top - (top + 12);
+		if (above < 0) window.scrollBy({ top: above, behavior: 'smooth' });
+	});
+});
+
 export function createMarkdownEditor(options: {
 	parent: HTMLElement;
 	doc: string;
@@ -541,6 +584,7 @@ export function createMarkdownEditor(options: {
 						return toggleTaskAt(view, target);
 					}
 				}),
+				keepCaretVisible,
 				EditorView.updateListener.of((update) => {
 					if (update.docChanged) options.onChange(update.state.doc.toString());
 					if (update.focusChanged) options.onFocusChange?.(update.view.hasFocus);

@@ -1,8 +1,11 @@
 <script lang="ts">
-	import { invalidateAll } from '$app/navigation';
-	import { queueNote, syncEntry } from '$lib/outbox';
-	import { normalizeTagName } from '$lib/tags';
+	import { goto, invalidateAll } from '$app/navigation';
+	import { page } from '$app/state';
+	import { openFilter } from '$lib/filter.svelte';
 	import { showToast } from '$lib/toast.svelte';
+	import { queueNote, syncEntry } from '$lib/outbox';
+	import { addPending, removePending } from '$lib/stream.svelte';
+	import { normalizeTagName } from '$lib/tags';
 	import type { Tag } from '$lib/types';
 	import { fly, fade, scale } from 'svelte/transition';
 	import { quintOut } from 'svelte/easing';
@@ -30,14 +33,34 @@
 
 	let hasContent = $derived(text.trim().length > 0 || Boolean(photoDataUrl));
 
+	// Tags typed during this session, newest first. A tag you just invented is
+	// the one you're most likely to want again in the next thought, so it goes
+	// to the front of the row rather than the end of a list you'd have to
+	// scroll to reach.
+	let freshTags = $state<string[]>([]);
+
+	let tagRow = $state<HTMLDivElement | null>(null);
+
 	let suggestions = $derived.by(() => {
-		const names = recentTags.map((t) => t.name);
-		for (const name of selected) if (!names.includes(name)) names.push(name);
-		return names.slice(0, 8);
+		const names: string[] = [];
+		for (const name of [...freshTags, ...selected, ...recentTags.map((t) => t.name)]) {
+			if (name && !names.includes(name)) names.push(name);
+		}
+		return names.slice(0, 10);
 	});
+
+	/* Search is a filter on the stream rather than a page of its own, so this
+	   opens the filter bar — and gets you back to the stream first if you're
+	   somewhere the stream isn't. */
+	function search() {
+		openFilter();
+		if (page.url.pathname !== '/') goto('/');
+	}
 
 	function openSheet() {
 		selected = contextTag ? [contextTag] : [];
+		addingTag = false;
+		newTagInput = '';
 		voiceError = '';
 		clearPhoto();
 		open = true;
@@ -143,9 +166,21 @@
 
 	function commitNewTag() {
 		const name = normalizeTagName(newTagInput);
-		if (name && !selected.includes(name)) selected = [...selected, name];
 		newTagInput = '';
 		addingTag = false;
+
+		if (!name) {
+			textarea?.focus();
+			return;
+		}
+
+		if (!selected.includes(name)) selected = [...selected, name];
+		freshTags = [name, ...freshTags.filter((t) => t !== name)];
+
+		// It's now the first chip in the row — make sure the row is actually
+		// showing its start, so the tag you just made is visible instead of
+		// somewhere off to the right.
+		queueMicrotask(() => tagRow?.scrollTo({ left: 0, behavior: 'smooth' }));
 		textarea?.focus();
 	}
 
@@ -178,11 +213,25 @@
 			tagNames: selected.map(normalizeTagName).filter(Boolean)
 		});
 
+		// Show it in the stream now. The POST is already on its way and the
+		// entry is durable in localStorage either way, so there is nothing
+		// worth making the reader wait for.
+		addPending(entry);
+
 		text = '';
 		clearPhoto();
 		closeSheet();
-		showToast('Saving…', { then: 'Saved' });
-		syncEntry(entry, () => invalidateAll());
+
+		syncEntry(
+			entry,
+			async () => {
+				// Reload first, then drop the local copy — doing it the other way
+				// round blinks the note out of the list for a frame.
+				await invalidateAll();
+				removePending(entry.client_id);
+			},
+			() => showToast('Saved on this device — will sync', { duration: 2600 })
+		);
 	}
 
 	/* ---------------- voice ---------------- */
@@ -265,9 +314,23 @@
 	}
 
 	function onKeydown(event: KeyboardEvent) {
-		if (event.key === 'Enter' && !event.shiftKey) {
-			event.preventDefault();
-			save();
+		if (event.key === 'Enter') {
+			// Cmd/Ctrl+Enter always saves, wherever you are.
+			if (event.metaKey || event.ctrlKey) {
+				event.preventDefault();
+				save();
+				return;
+			}
+			// A touch keyboard has no Shift+Enter, so making Enter submit there
+			// means you simply cannot write a second paragraph. On touch it's a
+			// newline and the green button is how you save; a hardware keyboard
+			// keeps Enter-to-save with Shift+Enter for a newline.
+			const touch = window.matchMedia('(pointer: coarse)').matches;
+			if (!touch && !event.shiftKey) {
+				event.preventDefault();
+				save();
+			}
+			return;
 		}
 		if (event.key === 'Escape') {
 			event.preventDefault();
@@ -320,11 +383,12 @@
 		</button>
 	</div>
 
-	<a
-		href="/search"
-		aria-label="Search"
-		class="pointer-events-auto grid h-[54px] w-[54px] shrink-0 place-items-center rounded-[1.1rem]"
+	<button
+		type="button"
+		aria-label="Search and filter"
+		class="pointer-events-auto grid h-[54px] w-[54px] shrink-0 place-items-center rounded-[1.1rem] active:scale-95"
 		style="background: var(--color-surface); border: 1px solid var(--color-border); box-shadow: 0 3px 12px rgba(0,0,0,.055); color: var(--color-ink-2);"
+		onclick={search}
 	>
 		<svg
 			width="19"
@@ -334,7 +398,7 @@
 			stroke="currentColor"
 			stroke-width="2"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg
 		>
-	</a>
+	</button>
 </div>
 
 <!-- ---------------- recording ---------------- -->
@@ -412,7 +476,7 @@
 
 	<div
 		class="fixed inset-x-0 bottom-0 z-40 flex max-h-[80vh] flex-col rounded-t-[1.375rem] px-[1.125rem] pt-[0.625rem]"
-		style="background: var(--color-surface); box-shadow: 0 -8px 34px rgba(0,0,0,.16); padding-bottom: calc(1.125rem + env(safe-area-inset-bottom));"
+		style="background: var(--color-surface); box-shadow: 0 -8px 34px rgba(0,0,0,.16); padding-bottom: calc(0.25rem + env(safe-area-inset-bottom));"
 		transition:fly={{ y: 420, duration: 320, easing: quintOut }}
 	>
 		<div
@@ -426,44 +490,85 @@
 			</p>
 		{/if}
 
-		<!-- Tags sit above the text, styled as pills: dashed and quiet until
-		     picked, filled once they're on — mirrors the destination affordance
-		     from the flat-stream prototype. "+ New" is pinned first so it's
-		     always reachable regardless of how far the row scrolls. -->
+		<!-- Tags sit above the text. "+ Tag" is pinned first so it's always
+		     reachable regardless of how far the row scrolls, and a tag you've
+		     just made lands at the head of that row rather than off the end of
+		     it. While you're typing one, an explicit ✓ sits next to the field:
+		     confirming shouldn't mean guessing that Enter works. -->
 		<div class="mb-3 flex shrink-0 items-center gap-1.5">
 			{#if addingTag}
-				<input
-					bind:this={newTagInputEl}
-					bind:value={newTagInput}
-					type="text"
-					placeholder="Tag name"
-					class="min-h-8 w-28 shrink-0 rounded-full border border-dashed px-3 py-1.5 text-[0.8rem] font-medium outline-none"
-					style="border-color: var(--color-border); color: var(--color-ink); background: none;"
-					onkeydown={(e) => {
-						if (e.key === 'Enter') {
-							e.preventDefault();
-							commitNewTag();
-						}
-						if (e.key === 'Escape') {
-							e.preventDefault();
-							cancelNewTag();
-						}
-					}}
-					onblur={commitNewTag}
-				/>
+				<div
+					class="flex min-h-8 shrink-0 items-center rounded-full border py-0.5 pr-0.5 pl-3"
+					style="border-color: var(--color-accent); background: var(--color-accent-soft);"
+				>
+					<input
+						bind:this={newTagInputEl}
+						bind:value={newTagInput}
+						type="text"
+						placeholder="Tag name"
+						autocapitalize="none"
+						autocomplete="off"
+						autocorrect="off"
+						enterkeyhint="done"
+						class="w-24 bg-transparent text-[0.8rem] font-medium outline-none"
+						style="color: var(--color-accent);"
+						onkeydown={(e) => {
+							if (e.key === 'Enter') {
+								e.preventDefault();
+								commitNewTag();
+							}
+							if (e.key === 'Escape') {
+								e.preventDefault();
+								cancelNewTag();
+							}
+						}}
+						onblur={commitNewTag}
+					/>
+					<button
+						type="button"
+						aria-label="Add tag"
+						class="grid h-7 w-7 shrink-0 place-items-center rounded-full active:scale-95"
+						style="background: var(--color-accent); color: var(--color-accent-ink);"
+						onclick={commitNewTag}
+					>
+						<svg
+							width="13"
+							height="13"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="2.8"
+							stroke-linecap="round"
+							stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5" /></svg
+						>
+					</button>
+				</div>
 			{:else}
 				<button
 					type="button"
-					class="min-h-8 shrink-0 rounded-full border border-dashed px-3 py-1.5 text-[0.8125rem] font-medium whitespace-nowrap active:scale-95"
-					style="border-color: var(--color-border); color: var(--color-ink-muted);"
+					class="flex min-h-8 shrink-0 items-center gap-1 rounded-full border px-2.5 py-1.5 text-[0.8125rem] font-semibold whitespace-nowrap active:scale-95"
+					style="border-color: var(--color-accent); color: var(--color-accent); background: none;"
 					onclick={startNewTag}
 				>
-					+ New
+					<svg
+						width="12"
+						height="12"
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="3"
+						stroke-linecap="round"><path d="M12 5v14M5 12h14" /></svg
+					>
+					Tag
 				</button>
 			{/if}
 
 			<div class="relative min-w-0 flex-1">
-				<div class="flex items-center gap-1.5 overflow-x-auto pr-6" style="scrollbar-width: none;">
+				<div
+					bind:this={tagRow}
+					class="flex items-center gap-1.5 overflow-x-auto pr-6"
+					style="scrollbar-width: none;"
+				>
 					{#each suggestions as name (name)}
 						{@const on = selected.includes(name)}
 						<button

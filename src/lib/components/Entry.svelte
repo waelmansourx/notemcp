@@ -1,7 +1,8 @@
 <script lang="ts">
 	import type { Note } from '$lib/types';
-	import { timeOfDay, hostname } from '$lib/dates';
-	import { firstLine, snippet, extractLeadingImage } from '$lib/markdown';
+	import { timeOfDay, hostname, streamDate } from '$lib/dates';
+	import { firstLine, snippet, excerpt, extractLeadingImage } from '$lib/markdown';
+	import { isPending } from '$lib/stream.svelte';
 	import TagChip from './TagChip.svelte';
 
 	let { note, showTime = false }: { note: Note; showTime?: boolean } = $props();
@@ -10,15 +11,26 @@
 	// just the text — no title field, because being asked to name an idea is
 	// the thing that stops you writing it down.
 	let isLink = $derived(Boolean(note.source_url));
-	let { image: embeddedImage, rest: textOnly } = $derived(extractLeadingImage(note.content_markdown));
+	let { image: embeddedImage, rest: textOnly } = $derived(
+		extractLeadingImage(note.content_markdown)
+	);
 	let hasEmbeddedImage = $derived(!isLink && Boolean(embeddedImage));
 	let heading = $derived(note.source_title?.trim() || note.title.trim() || '');
 	let caption = $derived(snippet(note.content_markdown));
-	let body = $derived(textOnly.trim() || firstLine(note.title) || 'Untitled');
+	let body = $derived(excerpt(textOnly) || firstLine(note.title) || 'Untitled');
 	let hasMeta = $derived(note.tags.length > 0 || isLink || showTime);
+
+	// A note that's still syncing has no server id behind it, so it reads as
+	// part of the stream but isn't something you can open yet.
+	let queued = $derived(isPending(note));
 </script>
 
-<a href={`/note/${note.id}`} class="entry block py-[15px] active:opacity-65">
+<a
+	href={queued ? undefined : `/note/${note.id}`}
+	class="entry block py-[15px] active:opacity-65"
+	style={queued ? 'opacity: 0.5;' : ''}
+	aria-busy={queued || undefined}
+>
 	{#if isLink}
 		<div class="flex items-start gap-3.5">
 			<div class="min-w-0 flex-1">
@@ -56,13 +68,19 @@
 				style="background: var(--color-surface-2);"
 			/>
 			{#if textOnly.trim()}
-				<p class="min-w-0 flex-1 text-[1rem] leading-[1.44] tracking-[-0.016em] whitespace-pre-wrap">
-					{textOnly.trim()}
+				<p
+					class="line-clamp-3 min-w-0 flex-1 text-[1rem] leading-[1.44] tracking-[-0.016em] whitespace-pre-wrap"
+				>
+					{excerpt(textOnly, 200)}
 				</p>
 			{/if}
 		</div>
 	{:else}
-		<p class="text-[1rem] leading-[1.44] tracking-[-0.016em] whitespace-pre-wrap">{body}</p>
+		<!-- Clamped: a note is as long as it needs to be, but a *list* of notes
+		     is only useful if you can see more than one of them at a time. -->
+		<p class="line-clamp-6 text-[1rem] leading-[1.44] tracking-[-0.016em] whitespace-pre-wrap">
+			{body}
+		</p>
 	{/if}
 
 	{#if hasMeta}
@@ -81,7 +99,7 @@
 			{/if}
 			{#if showTime}
 				{#if isLink}<span aria-hidden="true">·</span>{/if}
-				<span class="whitespace-nowrap">{timeOfDay(note.created_at)}</span>
+				<span class="whitespace-nowrap">{timeOfDay(streamDate(note))}</span>
 			{/if}
 		</div>
 	{/if}
