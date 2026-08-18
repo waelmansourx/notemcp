@@ -5,6 +5,7 @@
 	import { invalidate } from '$app/navigation';
 	import { browser } from '$app/environment';
 	import { flushOutbox } from '$lib/outbox';
+	import Toast from '$lib/components/Toast.svelte';
 
 	let { children, data } = $props();
 
@@ -43,3 +44,5 @@
 </svelte:head>
 
 {@render children()}
+
+<Toast />

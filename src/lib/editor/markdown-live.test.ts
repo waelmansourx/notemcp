@@ -113,6 +113,25 @@ describe('toolbar block commands', () => {
 	test('applies to every line the selection touches', () => {
 		expect(format('task', 'a\nb\nc', { anchor: 0, head: 5 })).toBe('- [ ] a\n- [ ] b\n- [ ] c');
 	});
+
+	// The caret sits at the start of the line whenever a button is tapped on a
+	// fresh or empty line, which is exactly when a marker inserted at that same
+	// position can end up *after* the caret — so the next thing typed lands in
+	// front of it (`text- [ ] `) instead of inside the item.
+	test('leaves the caret after a marker inserted at the caret', () => {
+		expect(format('task', '', { anchor: 0, head: 0 }, true)).toBe('- [ ] |');
+		expect(format('bullet', '', { anchor: 0, head: 0 }, true)).toBe('- |');
+		expect(format('heading', '', { anchor: 0, head: 0 }, true)).toBe('# |');
+	});
+
+	test('leaves the caret after the marker on an existing line', () => {
+		expect(format('task', 'milk', { anchor: 0, head: 0 }, true)).toBe('- [ ] |milk');
+		expect(format('heading', 'hi', { anchor: 0, head: 0 }, true)).toBe('# |hi');
+	});
+
+	test('keeps the caret with its text when a marker is removed', () => {
+		expect(format('task', '- [ ] milk', { anchor: 6, head: 6 }, true)).toBe('|milk');
+	});
 });
 
 describe('toolbar inline commands', () => {

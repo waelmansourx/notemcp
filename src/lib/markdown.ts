@@ -15,6 +15,17 @@ export function firstLine(markdown: string, max = 80): string {
 	return stripped.length > max ? stripped.slice(0, max - 1) + '…' : stripped;
 }
 
+/** Pulls a leading `![](...)` image off a note's content, e.g. one embedded
+ *  by the composer's photo button or the share-target flow. Returns the rest
+ *  of the text untouched so the feed can show a thumbnail instead of the raw
+ *  (often base64, always noisy) markdown. */
+export function extractLeadingImage(markdown: string): { image: string | null; rest: string } {
+	const trimmed = markdown.trimStart();
+	const match = trimmed.match(/^!\[[^\]]*\]\(([^)]+)\)/);
+	if (!match) return { image: null, rest: markdown };
+	return { image: match[1], rest: trimmed.slice(match[0].length) };
+}
+
 export function snippet(markdown: string, max = 140): string {
 	const text = markdown
 		.replace(/```[\s\S]*?```/g, ' ')

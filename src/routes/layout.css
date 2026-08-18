@@ -1,24 +1,23 @@
 @import 'tailwindcss';
 
 @theme {
-	--color-bg: #f4efe6;
+	--color-bg: #faf9f6;
 	--color-surface: #ffffff;
-	--color-surface-2: #ece4d6;
-	--color-border: #e6ddcc;
-	--color-ink: #211d17;
-	--color-ink-muted: #8a8072;
-	--color-ink-faint: #b3a996;
-	--color-accent: #de6240;
-	--color-accent-soft: #fce3d9;
+	--color-surface-2: #f2f0e9;
+	--color-border: #ebe9e2;
+	--color-ink: #15150f;
+	--color-ink-2: #45443c;
+	--color-ink-muted: #6b6a61;
+	--color-ink-faint: #96958c;
+	--color-accent: #1b5741;
+	--color-accent-soft: #e7efea;
 	--color-accent-ink: #ffffff;
-	--color-danger: #c23b34;
-	--color-success: #1f7a52;
-	--color-success-soft: #e3f3ea;
+	--color-danger: #96393c;
+	--color-danger-soft: #f7ecec;
 
-	--radius-sm: 0.75rem;
-	--radius-md: 1.25rem;
-	--radius-lg: 1.75rem;
-	--radius-xl: 2.25rem;
+	--radius-sm: 0.44rem;
+	--radius-md: 0.56rem;
+	--radius-lg: 0.88rem;
 
 	--font-sans: -apple-system, BlinkMacSystemFont, 'Inter', 'SF Pro Text', system-ui, sans-serif;
 	--font-mono: 'SF Mono', ui-monospace, 'Menlo', monospace;
@@ -26,19 +25,19 @@
 
 @media (prefers-color-scheme: dark) {
 	:root {
-		--color-bg: #17140f;
-		--color-surface: #211d17;
-		--color-surface-2: #2a251d;
-		--color-border: #362f24;
-		--color-ink: #f3ede0;
-		--color-ink-muted: #a89c88;
-		--color-ink-faint: #6b6152;
-		--color-accent: #ec7a54;
-		--color-accent-soft: #3a2620;
-		--color-accent-ink: #17140f;
-		--color-danger: #e0685f;
-		--color-success: #5fd8a0;
-		--color-success-soft: #163828;
+		--color-bg: #14140f;
+		--color-surface: #1c1c16;
+		--color-surface-2: #24241c;
+		--color-border: #2c2b23;
+		--color-ink: #f2efe6;
+		--color-ink-2: #cdcabe;
+		--color-ink-muted: #9c9a8f;
+		--color-ink-faint: #6e6d63;
+		--color-accent: #5fbf95;
+		--color-accent-soft: #1b2e26;
+		--color-accent-ink: #10201a;
+		--color-danger: #e0827f;
+		--color-danger-soft: #2e1e1e;
 	}
 }
 
@@ -54,6 +53,7 @@ body {
 	font-family: var(--font-sans);
 	-webkit-tap-highlight-color: transparent;
 	overscroll-behavior-y: none;
+	-webkit-font-smoothing: antialiased;
 }
 
 ::selection {
@@ -63,7 +63,6 @@ body {
 .safe-top {
 	padding-top: env(safe-area-inset-top);
 }
-
 .safe-bottom {
 	padding-bottom: env(safe-area-inset-bottom);
 }
@@ -74,4 +73,98 @@ button {
 
 textarea {
 	field-sizing: content;
+}
+
+/* ---------------------------------------------------------------
+   Tag chips.
+
+   One neutral default. Colour is opt-in per tag (tags.color), so a
+   library of fifty tags stays legible instead of turning into a
+   rainbow taxonomy. Every pair below clears 4.5:1 on its own tint.
+   --------------------------------------------------------------- */
+.tag {
+	display: inline-flex;
+	align-items: center;
+	white-space: nowrap;
+	font-size: 0.72rem;
+	font-weight: 600;
+	letter-spacing: -0.01em;
+	padding: 0.19rem 0.5rem;
+	border-radius: var(--radius-sm);
+	background: var(--color-surface-2);
+	color: var(--color-ink-muted);
+}
+.tag-lg {
+	font-size: 0.95rem;
+	font-weight: 640;
+	letter-spacing: -0.022em;
+	padding: 0.19rem 0.56rem;
+	border-radius: var(--radius-md);
+}
+
+.tag-green {
+	background: #e2ede6;
+	color: #1c5540;
+}
+.tag-indigo {
+	background: #e5e7f2;
+	color: #3a4179;
+}
+.tag-amber {
+	background: #f2e9d6;
+	color: #6e4c12;
+}
+.tag-rose {
+	background: #f4e5e9;
+	color: #7e3349;
+}
+.tag-slate {
+	background: #e6e9ed;
+	color: #3a4b58;
+}
+.tag-teal {
+	background: #dfedec;
+	color: #1d5454;
+}
+.tag-violet {
+	background: #eee6f1;
+	color: #57376a;
+}
+
+@media (prefers-color-scheme: dark) {
+	.tag-green {
+		background: #1a2c24;
+		color: #86c9a8;
+	}
+	.tag-indigo {
+		background: #1e2033;
+		color: #9ba4dd;
+	}
+	.tag-amber {
+		background: #2e2718;
+		color: #d3b078;
+	}
+	.tag-rose {
+		background: #301f24;
+		color: #d5949f;
+	}
+	.tag-slate {
+		background: #202629;
+		color: #9db0bd;
+	}
+	.tag-teal {
+		background: #172a2a;
+		color: #83bdba;
+	}
+	.tag-violet {
+		background: #271e2c;
+		color: #bb9ecb;
+	}
+}
+
+/* Hairline separator between stream entries. */
+.entry + .entry,
+.entry + .entry-group,
+.entry-group + .entry {
+	border-top: 1px solid var(--color-border);
 }

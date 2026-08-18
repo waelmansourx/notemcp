@@ -105,13 +105,18 @@ function decorate(view: EditorView): DecorationSet {
 	const ranges: Range<Decoration>[] = [];
 	const { doc } = view.state;
 
-	// While an IME composition is in progress (which on Android covers most
-	// typing, per CodeMirror's own docs), rewriting the DOM under the caret —
-	// hiding a list mark, swapping a checkbox widget in, wrapping a span —
-	// desyncs the keyboard's composition and corrupts what gets typed. So the
-	// line currently being composed is left as plain, undecorated markdown
-	// until composition ends; every other line still restyles live.
-	const composingLine = view.compositionStarted ? doc.lineAt(view.state.selection.main.head) : null;
+	// Replacing document text with something else — hiding a list mark, or
+	// swapping `[ ]` for a checkbox widget — pulls the DOM out from under an
+	// in-progress IME composition and corrupts what gets typed. Android opens
+	// a composition for nearly every word, so during one the replacements are
+	// held back, but only where they'd actually touch the caret.
+	//
+	// Styling marks (bold, headings, links) are deliberately NOT suppressed:
+	// they wrap text rather than replace it, so composition survives them, and
+	// blanking a whole line's styling on every keystroke reads as a flicker.
+	const composingAt = view.compositionStarted ? view.state.selection.main.head : null;
+	const disturbsComposition = (from: number, to: number) =>
+		composingAt !== null && from <= composingAt && to >= composingAt;
 
 	// Only the visible viewport is decorated — a long note stays cheap to
 	// scroll because offscreen lines never build decorations at all.
@@ -127,10 +132,6 @@ function decorate(view: EditorView): DecorationSet {
 					ranges.push(
 						Decoration.line({ class: `cm-md-h${level}` }).range(doc.lineAt(node.from).from)
 					);
-					return;
-				}
-
-				if (composingLine && node.from < composingLine.to && node.to > composingLine.from) {
 					return;
 				}
 
@@ -163,14 +164,16 @@ function decorate(view: EditorView): DecorationSet {
 						// it; a plain bullet is kept and tinted instead.
 						const item = node.node.parent;
 						const isTask = item?.name === 'ListItem' && !!item.getChild('Task');
+						const hide = isTask && !disturbsComposition(node.from, node.to);
 						ranges.push(
-							isTask
+							hide
 								? HIDDEN_DECO.range(node.from, node.to)
 								: LIST_MARK_DECO.range(node.from, node.to)
 						);
 						break;
 					}
 					case 'TaskMarker': {
+						if (disturbsComposition(node.from, node.to)) break;
 						const checked = doc.sliceString(node.from, node.to).toLowerCase().includes('x');
 						ranges.push(
 							Decoration.replace({ widget: new TaskCheckboxWidget(checked) }).range(
@@ -351,7 +354,19 @@ function toggleBlock(kind: 'task' | 'bullet' | 'heading'): StateCommand {
 		}
 
 		if (!changes.length) return false;
-		dispatch(state.update({ changes, scrollIntoView: true }));
+		// The caret is mapped with assoc = 1 so that it ends up *after* a marker
+		// inserted at its own position. With CodeMirror's default (assoc = -1) a
+		// caret at the start of the line — which is where it sits whenever the
+		// button is tapped on an empty or fresh line — stays in front of the
+		// marker, and everything typed next lands before it (`text- [ ] `).
+		const changeSet = state.changes(changes);
+		dispatch(
+			state.update({
+				changes: changeSet,
+				selection: state.selection.map(changeSet, 1),
+				scrollIntoView: true
+			})
+		);
 		return true;
 	};
 }

@@ -4,24 +4,67 @@ function startOfDay(d: Date): number {
 	return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
 }
 
-export function groupByRecency(notes: Note[]) {
+export interface DayGroup {
+	/** Stable key for {#each} — the day's epoch ms. */
+	key: number;
+	label: string;
+	/**
+	 * Whether times are shown inline by default. Only today: further back, the
+	 * day heading carries all the temporal information most scrolling needs,
+	 * and a timestamp on every entry is 800 numbers doing nothing.
+	 */
+	showTimes: boolean;
+	notes: Note[];
+}
+
+export function groupByDay(notes: Note[]): DayGroup[] {
 	const today = startOfDay(new Date());
+	const yesterday = today - 86_400_000;
 	const weekAgo = today - 6 * 86_400_000;
+	const thisYear = new Date().getFullYear();
 
-	const groups: { label: string; notes: Note[] }[] = [
-		{ label: 'Today', notes: [] },
-		{ label: 'This week', notes: [] },
-		{ label: 'Earlier', notes: [] }
-	];
-
+	const buckets = new Map<number, Note[]>();
 	for (const note of notes) {
 		const day = startOfDay(new Date(note.created_at));
-		if (day >= today) groups[0].notes.push(note);
-		else if (day >= weekAgo) groups[1].notes.push(note);
-		else groups[2].notes.push(note);
+		const bucket = buckets.get(day);
+		if (bucket) bucket.push(note);
+		else buckets.set(day, [note]);
 	}
 
-	return groups.filter((g) => g.notes.length > 0);
+	return [...buckets.entries()]
+		.sort((a, b) => b[0] - a[0])
+		.map(([day, dayNotes]) => {
+			const date = new Date(day);
+			let label: string;
+			if (day === today) label = 'Today';
+			else if (day === yesterday) label = 'Yesterday';
+			else if (day > weekAgo) label = date.toLocaleDateString(undefined, { weekday: 'long' });
+			else
+				label = date.toLocaleDateString(undefined, {
+					day: 'numeric',
+					month: 'short',
+					year: date.getFullYear() === thisYear ? undefined : 'numeric'
+				});
+
+			return { key: day, label, showTimes: day === today, notes: dayNotes };
+		});
+}
+
+/** "7:42 PM" — the inline form used on today's entries. */
+export function timeOfDay(iso: string): string {
+	return new Date(iso).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+}
+
+/** Full stamp, for when someone actually asks for the metadata. */
+export function fullTimestamp(iso: string): string {
+	return new Date(iso).toLocaleString(undefined, {
+		weekday: 'short',
+		day: 'numeric',
+		month: 'short',
+		year: 'numeric',
+		hour: 'numeric',
+		minute: '2-digit'
+	});
 }
 
 export function relativeTime(iso: string): string {

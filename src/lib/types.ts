@@ -1,6 +1,10 @@
+import type { TagColor } from './tags';
+
 export interface Tag {
 	id: string;
 	name: string;
+	/** Opt-in; null means the neutral chip. */
+	color?: TagColor | string | null;
 }
 
 export interface Note {

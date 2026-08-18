@@ -1,7 +1,18 @@
 import type { PageServerLoad } from './$types';
-import type { Note } from '$lib/types';
+import type { Note, Tag } from '$lib/types';
 
 const NOTE_SELECT = '*, note_tags(tags(id, name))';
+
+/** Tags ordered by how recently they were used — that's what "recent" means
+ *  in the composer, and it's free to derive from notes we already loaded. */
+function recentTagsFrom(notes: Note[]): Tag[] {
+	const seen = new Map<string, Tag>();
+	for (const note of notes) {
+		for (const tag of note.tags) if (!seen.has(tag.id)) seen.set(tag.id, tag);
+		if (seen.size >= 12) break;
+	}
+	return [...seen.values()].slice(0, 8);
+}
 
 export const load: PageServerLoad = async ({ locals: { supabase, user } }) => {
 	const { data } = await supabase
@@ -10,7 +21,6 @@ export const load: PageServerLoad = async ({ locals: { supabase, user } }) => {
 		.eq('user_id', user!.id)
 		.is('deleted_at', null)
 		.eq('archived', false)
-		.order('pinned', { ascending: false })
 		.order('created_at', { ascending: false })
 		.limit(300);
 
@@ -19,5 +29,5 @@ export const load: PageServerLoad = async ({ locals: { supabase, user } }) => {
 		return { ...rest, tags: (note_tags ?? []).map((nt: any) => nt.tags).filter(Boolean) };
 	});
 
-	return { notes };
+	return { notes, recentTags: recentTagsFrom(notes) };
 };
