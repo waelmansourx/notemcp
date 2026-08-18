@@ -1,0 +1,393 @@
+import {
+	EditorView,
+	Decoration,
+	WidgetType,
+	ViewPlugin,
+	keymap,
+	placeholder as placeholderExt,
+	type DecorationSet,
+	type ViewUpdate
+} from '@codemirror/view';
+import { EditorState, Prec, type Range, type StateCommand } from '@codemirror/state';
+import { Language, defineLanguageFacet, languageDataProp, syntaxTree } from '@codemirror/language';
+import { parser as commonmarkParser, TaskList, Strikethrough, Autolink } from '@lezer/markdown';
+import { history, historyKeymap, defaultKeymap } from '@codemirror/commands';
+
+// A Bear-style "live" markdown editor: there is no preview mode, because the
+// text you type is already styled in place. Syntax markers (#, **, `) stay
+// visible but dimmed, so the document is never lying about what it contains
+// and nothing reflows when the caret moves.
+//
+// This is deliberately not a WYSIWYG engine. Every decoration below is
+// derived from the syntax tree on each update and thrown away — the note's
+// source of truth is always the plain markdown string.
+
+// The language is assembled from @lezer/markdown directly rather than via
+// @codemirror/lang-markdown, which depends on @codemirror/lang-html and so
+// drags in the full JavaScript and CSS grammars plus the autocomplete
+// package — ~120kB gzipped of parsers for embedded code blocks that a notes
+// app will never render. Only the three GFM extensions that earn their place
+// here are enabled; tables are deliberately left out.
+const markdownData = defineLanguageFacet({
+	commentTokens: { block: { open: '<!--', close: '-->' } }
+});
+
+const markdownLanguage = new Language(
+	markdownData,
+	commonmarkParser.configure([
+		TaskList,
+		Strikethrough,
+		Autolink,
+		{ props: [languageDataProp.add({ Document: markdownData })] }
+	]),
+	[],
+	'markdown'
+);
+
+const HEADING_LEVEL: Record<string, number> = {
+	ATXHeading1: 1,
+	ATXHeading2: 2,
+	ATXHeading3: 3,
+	ATXHeading4: 4,
+	ATXHeading5: 5,
+	ATXHeading6: 6
+};
+
+// The punctuation that makes markdown markdown. Dimmed rather than hidden so
+// the text doesn't jump around as the caret enters and leaves a span.
+const SYNTAX_MARKS = new Set(['HeaderMark', 'EmphasisMark', 'CodeMark', 'LinkMark', 'QuoteMark']);
+
+const MARKER_DECO = Decoration.mark({ class: 'cm-md-marker' });
+const LIST_MARK_DECO = Decoration.mark({ class: 'cm-md-list-mark' });
+const STRONG_DECO = Decoration.mark({ class: 'cm-md-strong' });
+const EMPHASIS_DECO = Decoration.mark({ class: 'cm-md-emphasis' });
+const STRIKE_DECO = Decoration.mark({ class: 'cm-md-strike' });
+const INLINE_CODE_DECO = Decoration.mark({ class: 'cm-md-inline-code' });
+const LINK_DECO = Decoration.mark({ class: 'cm-md-link' });
+const URL_DECO = Decoration.mark({ class: 'cm-md-url' });
+const HIDDEN_DECO = Decoration.replace({});
+const CODE_LINE_DECO = Decoration.line({ class: 'cm-md-code-line' });
+const QUOTE_LINE_DECO = Decoration.line({ class: 'cm-md-quote-line' });
+
+class TaskCheckboxWidget extends WidgetType {
+	constructor(readonly checked: boolean) {
+		super();
+	}
+
+	eq(other: TaskCheckboxWidget) {
+		return other.checked === this.checked;
+	}
+
+	toDOM() {
+		const box = document.createElement('input');
+		box.type = 'checkbox';
+		box.checked = this.checked;
+		box.className = 'cm-md-task-checkbox';
+		box.setAttribute('aria-label', this.checked ? 'Mark as not done' : 'Mark as done');
+		return box;
+	}
+
+	// Let the click reach the view's own handlers (see toggleTaskAt below)
+	// instead of being swallowed as an ordinary widget interaction.
+	ignoreEvent() {
+		return false;
+	}
+}
+
+function decorate(view: EditorView): DecorationSet {
+	const ranges: Range<Decoration>[] = [];
+	const { doc } = view.state;
+
+	// Only the visible viewport is decorated — a long note stays cheap to
+	// scroll because offscreen lines never build decorations at all.
+	for (const { from, to } of view.visibleRanges) {
+		syntaxTree(view.state).iterate({
+			from,
+			to,
+			enter: (node) => {
+				const name = node.name;
+				const level = HEADING_LEVEL[name];
+
+				if (level) {
+					ranges.push(
+						Decoration.line({ class: `cm-md-h${level}` }).range(doc.lineAt(node.from).from)
+					);
+					return;
+				}
+
+				if (SYNTAX_MARKS.has(name)) {
+					ranges.push(MARKER_DECO.range(node.from, node.to));
+					return;
+				}
+
+				switch (name) {
+					case 'StrongEmphasis':
+						ranges.push(STRONG_DECO.range(node.from, node.to));
+						break;
+					case 'Emphasis':
+						ranges.push(EMPHASIS_DECO.range(node.from, node.to));
+						break;
+					case 'Strikethrough':
+						ranges.push(STRIKE_DECO.range(node.from, node.to));
+						break;
+					case 'InlineCode':
+						ranges.push(INLINE_CODE_DECO.range(node.from, node.to));
+						break;
+					case 'Link':
+						ranges.push(LINK_DECO.range(node.from, node.to));
+						break;
+					case 'URL':
+						ranges.push(URL_DECO.range(node.from, node.to));
+						break;
+					case 'ListMark': {
+						// A task's bullet is redundant next to its checkbox, so hide
+						// it; a plain bullet is kept and tinted instead.
+						const item = node.node.parent;
+						const isTask = item?.name === 'ListItem' && !!item.getChild('Task');
+						ranges.push(
+							isTask
+								? HIDDEN_DECO.range(node.from, node.to)
+								: LIST_MARK_DECO.range(node.from, node.to)
+						);
+						break;
+					}
+					case 'TaskMarker': {
+						const checked = doc.sliceString(node.from, node.to).toLowerCase().includes('x');
+						ranges.push(
+							Decoration.replace({ widget: new TaskCheckboxWidget(checked) }).range(
+								node.from,
+								node.to
+							)
+						);
+						break;
+					}
+					case 'FencedCode':
+					case 'CodeBlock': {
+						const first = doc.lineAt(node.from).number;
+						const last = doc.lineAt(node.to).number;
+						for (let n = first; n <= last; n++) {
+							ranges.push(CODE_LINE_DECO.range(doc.line(n).from));
+						}
+						break;
+					}
+					case 'Blockquote': {
+						const first = doc.lineAt(node.from).number;
+						const last = doc.lineAt(node.to).number;
+						for (let n = first; n <= last; n++) {
+							ranges.push(QUOTE_LINE_DECO.range(doc.line(n).from));
+						}
+						break;
+					}
+				}
+			}
+		});
+	}
+
+	// Sorting is left to Decoration.set rather than a RangeSetBuilder: line
+	// decorations are emitted at their line's start, which can precede the
+	// node that triggered them, so the tree walk alone isn't strictly ordered.
+	return Decoration.set(ranges, true);
+}
+
+const livePreviewPlugin = ViewPlugin.fromClass(
+	class {
+		decorations: DecorationSet;
+
+		constructor(view: EditorView) {
+			this.decorations = decorate(view);
+		}
+
+		update(update: ViewUpdate) {
+			if (update.docChanged || update.viewportChanged || update.selectionSet) {
+				this.decorations = decorate(update.view);
+			}
+		}
+	},
+	{ decorations: (plugin) => plugin.decorations }
+);
+
+const TASK_BOX_RE = /^(\s*[-*+]\s+\[)([ xX])(\])/;
+
+// Exported for tests: given a line, where does its checkbox character sit and
+// what should replace it? Kept free of both the view and the document so the
+// toggle can be exercised without a DOM.
+export function taskToggleEdit(lineText: string): { offset: number; insert: string } | null {
+	const match = lineText.match(TASK_BOX_RE);
+	if (!match) return null;
+	return { offset: match[1].length, insert: match[2] === ' ' ? 'x' : ' ' };
+}
+
+// Tapping a rendered checkbox rewrites the `[ ]` / `[x]` it stands for. The
+// position is resolved from the DOM at click time rather than captured when
+// the widget was built, so edits elsewhere in the note can't misdirect it.
+function toggleTaskAt(view: EditorView, target: HTMLElement): boolean {
+	const line = view.state.doc.lineAt(view.posAtDOM(target));
+	const edit = taskToggleEdit(line.text);
+	if (!edit) return false;
+
+	const at = line.from + edit.offset;
+	view.dispatch({ changes: { from: at, to: at + 1, insert: edit.insert } });
+	return true;
+}
+
+const LIST_PREFIX_RE = /^(\s*)(?:([-*+])\s+(\[[ xX]\]\s+)?|(\d+)([.)])\s+)/;
+
+// Enter continues whatever list you're in, and a second Enter on an empty
+// item ends it — the two behaviours that make a checklist feel native rather
+// than like markdown you have to retype. Typed as a StateCommand (rather than
+// taking an EditorView) so it needs only state + dispatch, which also makes it
+// directly testable without a DOM.
+export const continueList: StateCommand = ({ state, dispatch }) => {
+	const range = state.selection.main;
+	if (!range.empty) return false;
+
+	const line = state.doc.lineAt(range.head);
+	const match = line.text.match(LIST_PREFIX_RE);
+	if (!match) return false;
+
+	const prefixLength = match[0].length;
+	// Only continue from the end of the item; mid-line Enter should just split.
+	if (range.head < line.from + prefixLength) return false;
+
+	const rest = line.text.slice(prefixLength);
+	if (rest.trim() === '') {
+		dispatch(
+			state.update({
+				changes: { from: line.from, to: line.from + prefixLength, insert: '' },
+				selection: { anchor: line.from }
+			})
+		);
+		return true;
+	}
+
+	const [, indent, bullet, task, ordinal, delimiter] = match;
+	const next = bullet
+		? `${indent}${bullet} ${task ? '[ ] ' : ''}`
+		: `${indent}${Number(ordinal) + 1}${delimiter} `;
+
+	const insert = '\n' + next;
+	dispatch(
+		state.update({
+			changes: { from: range.head, insert },
+			selection: { anchor: range.head + insert.length },
+			scrollIntoView: true
+		})
+	);
+	return true;
+};
+
+const theme = EditorView.theme({
+	'&': {
+		color: 'var(--color-ink)',
+		backgroundColor: 'transparent',
+		fontSize: '1rem'
+	},
+	'&.cm-focused': { outline: 'none' },
+	'.cm-content': {
+		padding: '0',
+		fontFamily: 'var(--font-sans)',
+		lineHeight: '1.65',
+		caretColor: 'var(--color-accent)',
+		// Fill the shell so a tap anywhere in the blank area below a short
+		// note still lands in the document.
+		minHeight: '100%'
+	},
+	'.cm-line': { padding: '0' },
+	'.cm-scroller': { fontFamily: 'var(--font-sans)', lineHeight: '1.65' },
+	'.cm-cursor, .cm-dropCursor': { borderLeftColor: 'var(--color-accent)' },
+	'.cm-placeholder': { color: 'var(--color-ink-faint)' },
+	'&.cm-focused .cm-selectionBackground, .cm-selectionBackground, ::selection': {
+		backgroundColor: 'var(--color-accent-soft)'
+	},
+
+	'.cm-md-marker': { color: 'var(--color-ink-faint)', fontWeight: '400' },
+	'.cm-md-list-mark': { color: 'var(--color-accent)' },
+	'.cm-md-strong': { fontWeight: '650' },
+	'.cm-md-emphasis': { fontStyle: 'italic' },
+	'.cm-md-strike': { textDecoration: 'line-through', color: 'var(--color-ink-muted)' },
+	'.cm-md-inline-code': {
+		fontFamily: 'var(--font-mono)',
+		fontSize: '0.875em',
+		background: 'var(--color-surface-2)',
+		borderRadius: '0.35em',
+		padding: '0.1em 0.15em'
+	},
+	'.cm-md-link': { color: 'var(--color-accent)' },
+	'.cm-md-url': { color: 'var(--color-ink-faint)' },
+
+	'.cm-md-h1': {
+		fontSize: '1.5em',
+		fontWeight: '600',
+		lineHeight: '1.3',
+		letterSpacing: '-0.01em'
+	},
+	'.cm-md-h2': {
+		fontSize: '1.25em',
+		fontWeight: '600',
+		lineHeight: '1.3',
+		letterSpacing: '-0.01em'
+	},
+	'.cm-md-h3': { fontSize: '1.1em', fontWeight: '600', lineHeight: '1.35' },
+	'.cm-md-h4, .cm-md-h5, .cm-md-h6': { fontWeight: '600' },
+
+	'.cm-md-code-line': {
+		fontFamily: 'var(--font-mono)',
+		fontSize: '0.85em',
+		background: 'var(--color-surface-2)'
+	},
+	'.cm-md-quote-line': {
+		borderLeft: '3px solid var(--color-border)',
+		paddingLeft: '0.85em',
+		color: 'var(--color-ink-muted)'
+	},
+
+	'.cm-md-task-checkbox': {
+		width: '1.05em',
+		height: '1.05em',
+		accentColor: 'var(--color-accent)',
+		verticalAlign: '-0.15em',
+		marginRight: '0.15em',
+		cursor: 'pointer'
+	}
+});
+
+export function createMarkdownEditor(options: {
+	parent: HTMLElement;
+	doc: string;
+	placeholder?: string;
+	onChange: (value: string) => void;
+}): EditorView {
+	const view = new EditorView({
+		parent: options.parent,
+		state: EditorState.create({
+			doc: options.doc,
+			extensions: [
+				// Deliberately not `basicSetup` — line numbers, folding, bracket
+				// matching and autocompletion all belong to a code editor, not a
+				// notes app, and each one is bundle weight for a feature nobody
+				// asked for here.
+				history(),
+				Prec.high(keymap.of([{ key: 'Enter', run: continueList }])),
+				keymap.of([...defaultKeymap, ...historyKeymap]),
+				markdownLanguage,
+				EditorView.lineWrapping,
+				livePreviewPlugin,
+				theme,
+				placeholderExt(options.placeholder ?? ''),
+				EditorView.domEventHandlers({
+					click(event, view) {
+						const target = event.target as HTMLElement;
+						if (!target.classList?.contains('cm-md-task-checkbox')) return false;
+						event.preventDefault();
+						return toggleTaskAt(view, target);
+					}
+				}),
+				EditorView.updateListener.of((update) => {
+					if (update.docChanged) options.onChange(update.state.doc.toString());
+				})
+			]
+		})
+	});
+
+	return view;
+}

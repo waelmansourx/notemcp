@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { tick } from 'svelte';
 	import { goto } from '$app/navigation';
-	import { toggleTaskLine, TASK_ITEM_RE } from '$lib/markdown';
+	import MarkdownEditor from '$lib/components/MarkdownEditor.svelte';
+	import { TASK_ITEM_RE } from '$lib/markdown';
 	import { hostname } from '$lib/dates';
 	import type { Note } from '$lib/types';
 
@@ -37,21 +37,8 @@
 	let editingTagIndex = $state<number | null>(null);
 	let editTagValue = $state('');
 	let tagError = $state('');
-	let showPreview = $state(false);
 	let saveState = $state<'idle' | 'saving' | 'saved'>('idle');
 	let deleting = $state(false);
-
-	// marked + highlight.js are ~40kB of extra JS that only the preview
-	// needs, so they're not in the editor's initial chunk — load them the
-	// first time the note actually has a preview to show.
-	let renderMarkdownWithTasks = $state<((source: string) => string) | null>(null);
-	$effect(() => {
-		if (showPreview && !renderMarkdownWithTasks) {
-			import('$lib/markdown-render').then((m) => {
-				renderMarkdownWithTasks = m.renderMarkdownWithTasks;
-			});
-		}
-	});
 
 	let ready = false;
 	$effect(() => {
@@ -186,41 +173,6 @@
 		}
 	}
 
-	async function handleContentKeydown(e: KeyboardEvent) {
-		if (e.key !== 'Enter') return;
-		const el = e.currentTarget as HTMLTextAreaElement;
-		const pos = el.selectionStart;
-		const before = content.slice(0, pos);
-		const after = content.slice(pos);
-		const lineStart = before.lastIndexOf('\n') + 1;
-		const currentLine = before.slice(lineStart);
-		const match = currentLine.match(TASK_ITEM_RE);
-		if (!match) return;
-
-		e.preventDefault();
-		const itemText = currentLine.slice(match[0].length);
-
-		if (itemText.trim() === '') {
-			content = content.slice(0, lineStart) + after;
-			await tick();
-			el.setSelectionRange(lineStart, lineStart);
-		} else {
-			const insertion = '\n- [ ] ';
-			content = before + insertion + after;
-			await tick();
-			el.setSelectionRange(pos + insertion.length, pos + insertion.length);
-		}
-	}
-
-	function handlePreviewClick(e: MouseEvent) {
-		const target = e.target as HTMLElement;
-		if (target.tagName !== 'INPUT' || target.getAttribute('type') !== 'checkbox') return;
-		const index = Number(target.getAttribute('data-task-index'));
-		if (Number.isNaN(index)) return;
-		content = toggleTaskLine(content, index);
-		persist();
-	}
-
 	async function togglePin() {
 		pinned = !pinned;
 	}
@@ -305,16 +257,6 @@
 						d="M12 6h8M12 12h8M12 18h8"
 					/></svg
 				>
-			</button>
-			<button
-				onclick={() => (showPreview = !showPreview)}
-				aria-pressed={showPreview}
-				class="rounded-full px-3 py-1.5 text-xs font-medium"
-				style={showPreview
-					? 'background: var(--color-accent-soft); color: var(--color-accent);'
-					: 'color: var(--color-ink-muted);'}
-			>
-				Preview
 			</button>
 			{#if id}
 				<button
@@ -407,20 +349,7 @@
 		style="color: var(--color-ink);"
 	/>
 
-	{#if showPreview}
-		<div class="prose-note pb-6" onclick={handlePreviewClick} role="presentation">
-			{@html (renderMarkdownWithTasks && renderMarkdownWithTasks(content)) ||
-				'<p style="color: var(--color-ink-faint)">Nothing to preview yet.</p>'}
-		</div>
-	{:else}
-		<textarea
-			bind:value={content}
-			onkeydown={handleContentKeydown}
-			placeholder="Write something…"
-			rows="1"
-			class="w-full flex-1 resize-none bg-transparent pb-6 text-[1rem] leading-relaxed outline-none"
-			style="color: var(--color-ink);"></textarea>
-	{/if}
+	<MarkdownEditor bind:value={content} />
 
 	<div
 		class="sticky bottom-0 -mx-4 flex flex-wrap items-center gap-1.5 px-4 pt-2 pb-2"
