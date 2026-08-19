@@ -1,13 +1,32 @@
 import type { LayoutServerLoad } from './$types';
-import type { GroupStub } from '$lib/types';
+import type { Tag, ThreadStub } from '$lib/types';
 
-/** Enough recent notes to have seen every tag you actually reach for, while
- *  selecting no bodies — an embedded photo is a base64 data URL running to
- *  megabytes and has no business riding along with a chip row. */
-const TAG_WINDOW = 60;
+/* Only what a strip of cards needs: no bodies, so a captured photo's base64
+   data URL never rides along. `preview` and `thread_count` are computed
+   columns on the notes table. */
+const STUB_SELECT =
+	'id, title, source_title, source_image, source_url, updated_at, preview, thread_count';
 
-/** More than a row's worth would just be a list to read. */
-const GROUP_LIMIT = 12;
+const RECENT_LIMIT = 8;
+
+/** Enough recent notes to have seen every tag you actually reach for, still
+ *  selecting no bodies. */
+const TAG_WINDOW = 40;
+
+function label(row: any): string {
+	const raw = (row.source_title || row.title || row.preview || '').replace(/\s+/g, ' ').trim();
+	if (!raw) return 'Untitled';
+	return raw.length > 60 ? raw.slice(0, 59) + '…' : raw;
+}
+
+function hostname(url: string | null): string | null {
+	if (!url) return null;
+	try {
+		return new URL(url).hostname.replace(/^www\./, '');
+	} catch {
+		return null;
+	}
+}
 
 export const load: LayoutServerLoad = async ({ locals: { session, supabase, user }, cookies }) => {
 	// authGuard (hooks.server.ts) already ran safeGetSession() for this
@@ -15,48 +34,63 @@ export const load: LayoutServerLoad = async ({ locals: { session, supabase, user
 	// which was adding a second network round-trip to every page load.
 
 	/*
-	 * The groups you could be writing into.
-	 *
-	 * This used to be a list of recent *notes* to continue. The container is
-	 * the tag now, so it's a list of tags — loaded here rather than per page so
-	 * that every capture surface (the composer, the OS share sheet) offers the
-	 * same ones, in the same order, instead of the share sheet falling back to
-	 * five hard-coded names.
-	 *
-	 * Count and last-touched come from the window rather than an aggregate
-	 * query: this is a sense of weight for a row of chips, not an audited
-	 * total, and it's the same trade the stream's filter row already makes.
+	 * The threads you could be writing into, loaded here rather than per page
+	 * so the composer offers the same ones wherever it is on screen. Heads of
+	 * threads only: you continue a thought, never a continuation.
 	 */
-	let recentGroups: GroupStub[] = [];
+	let recentThreads: ThreadStub[] = [];
+
+	/* The tags you've reached for lately. Loaded here rather than on the
+	   stream page so that every capture surface — the composer and the OS
+	   share sheet — offers the same row, instead of the share sheet falling
+	   back to five hard-coded ones. */
+	let recentTags: Tag[] = [];
 
 	if (user) {
-		const { data } = await supabase
-			.from('notes')
-			.select('id, updated_at, note_tags(tags(id, name))')
-			.eq('user_id', user.id)
-			.is('deleted_at', null)
-			.eq('archived', false)
-			.order('updated_at', { ascending: false })
-			.limit(TAG_WINDOW);
+		const [threadsResult, tagsResult] = await Promise.all([
+			supabase
+				.from('notes')
+				.select(STUB_SELECT)
+				.eq('user_id', user.id)
+				.is('deleted_at', null)
+				.is('parent_id', null)
+				.eq('archived', false)
+				.order('updated_at', { ascending: false })
+				.limit(RECENT_LIMIT),
+			supabase
+				.from('notes')
+				.select('id, note_tags(tags(id, name))')
+				.eq('user_id', user.id)
+				.is('deleted_at', null)
+				.order('updated_at', { ascending: false })
+				.limit(TAG_WINDOW)
+		]);
 
-		// Rows arrive last-touched first, so a tag's first sighting is both its
-		// last activity and its place in the row: most recently used wins.
-		const seen = new Map<string, GroupStub>();
-		for (const row of data ?? []) {
+		recentThreads = (threadsResult.data ?? []).map((row: any) => ({
+			id: row.id,
+			label: label(row),
+			image: row.source_image ?? null,
+			source: hostname(row.source_url ?? null),
+			count: row.thread_count ?? 0,
+			at: row.updated_at
+		}));
+
+		// Most recently used first, deduped — the order the rows came back in
+		// is already "last touched", so first sighting wins.
+		const seen = new Map<string, Tag>();
+		for (const row of tagsResult.data ?? []) {
 			for (const nt of (row as any).note_tags ?? []) {
 				const tag = nt.tags;
-				if (!tag) continue;
-				const found = seen.get(tag.name);
-				if (found) found.count += 1;
-				else seen.set(tag.name, { name: tag.name, count: 1, at: (row as any).updated_at });
+				if (tag && !seen.has(tag.id)) seen.set(tag.id, { id: tag.id, name: tag.name });
 			}
 		}
-		recentGroups = [...seen.values()].slice(0, GROUP_LIMIT);
+		recentTags = [...seen.values()].slice(0, 10);
 	}
 
 	return {
 		session,
 		cookies: cookies.getAll(),
-		recentGroups
+		recentThreads,
+		recentTags
 	};
 };

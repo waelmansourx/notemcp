@@ -1,5 +1,6 @@
 import type { PageServerLoad } from './$types';
 import type { Note, Tag } from '$lib/types';
+import { attachChildren } from '$lib/thread';
 
 const NOTE_SELECT = '*, note_tags(tags(id, name))';
 
@@ -43,16 +44,15 @@ export const load: PageServerLoad = async ({ locals: { supabase, user } }) => {
 		.filter((t) => t.count > 0)
 		.sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
 
-	// The stream is flat, and deliberately: it's every thought in the order you
-	// had them. Grouping lives on the tag — /tags for the containers, /?tag=x
-	// for one of them — rather than being folded into the river, which is what
-	// made some notes read as headings with other notes filed underneath.
-	//
 	// `ok: false` means the query failed rather than "you have no notes" — the
 	// page uses it to fall back to its local copy instead of telling you the
 	// stream is empty.
-	//
-	// `recentGroups` comes from the root layout, so every capture surface
-	// offers the same row rather than each page deriving its own.
-	return { notes, allTags, ok: !notesResult.error };
+	// Continuations arrive in the same list as everything else — they're
+	// ordinary notes — and are folded into the thoughts they continue here, so
+	// the stream is a list of threads rather than a list of fragments.
+	const threads = attachChildren(notes);
+
+	// `recentTags` comes from the root layout, so every capture surface offers
+	// the same row rather than each page deriving its own.
+	return { notes: threads, allTags, ok: !notesResult.error };
 };

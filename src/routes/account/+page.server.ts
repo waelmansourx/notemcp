@@ -9,11 +9,7 @@ export const load: PageServerLoad = async ({ locals: { supabase, user }, url }) 
 		.eq('user_id', user!.id)
 		.order('created_at', { ascending: false });
 
-	return {
-		email: user!.email,
-		tokens: tokens ?? [],
-		mcpUrl: new URL('/mcp', url.origin).toString()
-	};
+	return { email: user!.email, tokens: tokens ?? [], mcpUrl: new URL('/mcp', url.origin).toString() };
 };
 
 export const actions: Actions = {
@@ -41,9 +37,7 @@ export const actions: Actions = {
 		const token = generateToken();
 		const token_hash = await hashToken(token);
 
-		const { error } = await supabase
-			.from('api_tokens')
-			.insert({ user_id: user!.id, name, token_hash });
+		const { error } = await supabase.from('api_tokens').insert({ user_id: user!.id, name, token_hash });
 
 		if (error) {
 			return fail(400, { tokenError: error.message });

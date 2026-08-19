@@ -20,7 +20,8 @@ export interface OutboxEntry {
 	source_title: string | null;
 	source_description: string | null;
 	source_image: string | null;
-	/** Where it goes: the tags it was filed under, if any. */
+	/** Set when this thought was written into an existing thread. */
+	parent_id: string | null;
 	tagNames: string[];
 	queued_at: string;
 }
@@ -68,6 +69,7 @@ async function send(entry: OutboxEntry): Promise<{ id: string } | null> {
 		source_title: entry.source_title,
 		source_description: entry.source_description,
 		source_image: entry.source_image,
+		parent_id: entry.parent_id,
 		tagNames: entry.tagNames
 	});
 

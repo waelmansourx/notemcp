@@ -5,27 +5,19 @@
 	import EditorToolbar from '$lib/components/EditorToolbar.svelte';
 	import { hostname, timeOfDay } from '$lib/dates';
 	import { clearDraft, isNewerThan, pruneDrafts, readDraft, saveDraft } from '$lib/draft.svelte';
-	import { openIn } from '$lib/composer.svelte';
+	import { stubOf } from '$lib/thread';
+	import { writeInto } from '$lib/composer.svelte';
 	import Thought from './Thought.svelte';
 	import type { Note } from '$lib/types';
 
 	let {
 		existingNote = null,
 		prefill = null,
-		group = null,
-		groups = [],
-		peers = [],
-		total = 0
+		thread = []
 	}: {
 		existingNote?: Note | null;
-		/** The tag this note is being read inside — its container. */
-		group?: string | null;
-		/** Every tag it carries, so you can read it inside a different one. */
-		groups?: string[];
-		/** The group's notes, oldest first, including this one. */
-		peers?: Note[];
-		/** How many notes carry the tag in total, which may exceed `peers`. */
-		total?: number;
+		/** Every thought in this thread, oldest first, including this one. */
+		thread?: Note[];
 		prefill?: {
 			title?: string;
 			content_markdown?: string;
@@ -37,19 +29,16 @@
 	} = $props();
 
 	/*
-	 * A group reads as one run of thinking, so the note you opened is shown
+	 * A thread reads as one conversation, so the thought you opened is shown
 	 * where it actually falls in time — with whatever came before it above and
 	 * whatever came after below — rather than as a document with the others
-	 * filed underneath it as replies. Nothing here is anyone's parent: these
-	 * are siblings under the tag, and the only thing special about this one is
-	 * that it's the one you're editing.
+	 * filed underneath it as replies. Every thought in a thread is a peer; the
+	 * only thing special about this one is that it's the one you're editing.
 	 */
-	let position = $derived(existingNote ? peers.findIndex((p) => p.id === existingNote.id) : -1);
-	let before = $derived(position > 0 ? peers.slice(0, position) : []);
-	let after = $derived(position >= 0 ? peers.slice(position + 1) : []);
-	let inGroup = $derived(peers.length > 1);
-	/** Notes in this tag older than the window the page holds. */
-	let earlier = $derived(Math.max(0, total - peers.length));
+	let position = $derived(existingNote ? thread.findIndex((t) => t.id === existingNote.id) : -1);
+	let before = $derived(position > 0 ? thread.slice(0, position) : []);
+	let after = $derived(position >= 0 ? thread.slice(position + 1) : []);
+	let inThread = $derived(thread.length > 1);
 
 	// Opening the fourth thought shouldn't dump you at the first one. The
 	// editor is scrolled to the top of the viewport once, on mount, so you
@@ -460,60 +449,16 @@
 		</div>
 	</header>
 
-	<!--
-		The container, named at the top of the thing it contains.
-
-		This is the whole of point four made visible: you are not looking at a
-		note with replies under it, you are looking at #dental with your notes
-		in it, one of which happens to be open for editing. A note carrying more
-		than one tag is in more than one group at once, so the others sit beside
-		it as a way to re-read the same note among different company.
-	-->
-	{#if group}
-		<div class="mb-6 flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
-			<a href={`/?tag=${encodeURIComponent(group)}`} class="tag tag-lg active:opacity-60"
-				>#{group}</a
-			>
-			<span class="text-[0.8rem] font-bold tabular-nums" style="color: var(--color-ink-faint);">
-				{total}
-				{total === 1 ? 'thought' : 'thoughts'}
-			</span>
-			<span class="flex-1"></span>
-			{#each groups as other (other)}
-				{#if other !== group}
-					<a
-						href={`?group=${encodeURIComponent(other)}`}
-						class="text-[0.8rem] font-bold active:opacity-60"
-						style="color: var(--color-ink-faint);">#{other}</a
-					>
-				{/if}
-			{/each}
-		</div>
-	{/if}
-
-	{#if earlier > 0}
-		<a
-			href={`/?tag=${encodeURIComponent(group ?? '')}`}
-			class="mb-6 block text-[0.78rem] font-bold active:opacity-60"
-			style="color: var(--color-ink-faint);"
-		>
-			{earlier} earlier {earlier === 1 ? 'thought' : 'thoughts'} in #{group}
-		</a>
-	{/if}
-
 	{#if before.length > 0}
 		<div class="mb-7 space-y-6">
 			{#each before as thought (thought.id)}
-				<Thought
-					note={thought}
-					href={`/note/${thought.id}?group=${encodeURIComponent(group ?? '')}`}
-				/>
+				<Thought note={thought} href={`/note/${thought.id}`} />
 			{/each}
 		</div>
 	{/if}
 
 	<div bind:this={editorBlock} style="scroll-margin-top: 3.5rem;">
-		{#if inGroup && existingNote}
+		{#if inThread && existingNote}
 			<p class="mb-1.5 text-[0.72rem] font-bold tabular-nums" style="color: var(--color-accent);">
 				{timeOfDay(existingNote.created_at)} · editing
 			</p>
@@ -598,8 +543,8 @@
 				}
 			}}
 			class="mb-1.5 w-full resize-none overflow-hidden bg-transparent font-serif font-semibold tracking-tight outline-none"
-			class:text-xl={!inGroup}
-			class:text-[1.02rem]={inGroup}
+			class:text-xl={!inThread}
+			class:text-[1.02rem]={inThread}
 			style="color: var(--color-ink);"></textarea>
 
 		<MarkdownEditor bind:this={editor} bind:value={content} bind:focused={editorFocused} />
@@ -682,29 +627,23 @@
 	{#if after.length > 0}
 		<div class="mt-7 space-y-6">
 			{#each after as thought (thought.id)}
-				<Thought
-					note={thought}
-					href={`/note/${thought.id}?group=${encodeURIComponent(group ?? '')}`}
-				/>
+				<Thought note={thought} href={`/note/${thought.id}`} />
 			{/each}
 		</div>
 	{/if}
 
 	<!--
-		Adding writes a new note into this tag — a peer, at the end, in time
-		order. It reads the same whether you got here from the first thought or
-		the fifth, because there is no first thought to be under.
-
-		A note with no tag is in no group, so there is nothing here to add to;
-		giving it one in the row below is what makes this appear.
+		Adding always lands at the end of the thread, never "under" whichever
+		thought you happen to have open — so it reads the same whether you got
+		here from the first thought or the fifth.
 	-->
-	{#if existingNote && group}
+	{#if existingNote}
 		<button
 			type="button"
 			class="mt-7 flex items-center gap-2 self-start rounded-full py-2 pr-4 pl-3 text-[0.82rem] font-bold active:scale-95"
 			style="background: var(--color-accent-soft); color: var(--color-accent);"
 			onclick={() => {
-				openIn(group);
+				writeInto(stubOf(thread[0] ?? existingNote));
 				goto('/');
 			}}
 		>
@@ -717,7 +656,7 @@
 				stroke-width="3"
 				stroke-linecap="round"><path d="M12 5v14M5 12h14" /></svg
 			>
-			Add to #{group}
+			Add a thought
 		</button>
 	{/if}
 </div>

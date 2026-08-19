@@ -1,7 +1,7 @@
 <script lang="ts">
-	import type { Tag, NoteStub } from '$lib/types';
+	import type { Tag, ThreadStub } from '$lib/types';
 	import { relativeTime } from '$lib/dates';
-	import { openIn } from '$lib/composer.svelte';
+	import { writeInto } from '$lib/composer.svelte';
 
 	let {
 		tag,
@@ -10,14 +10,14 @@
 	}: {
 		tag: Tag;
 		count: number;
-		notes: NoteStub[];
+		notes: ThreadStub[];
 	} = $props();
 
 	/** Three to a page. The next page peeks past the right edge, which is the
 	 *  only thing that has to say "there's more" — no "See all" button, no
 	 *  count to read, just a card that is visibly cut off. */
 	let pages = $derived.by(() => {
-		const out: NoteStub[][] = [];
+		const out: ThreadStub[][] = [];
 		for (let i = 0; i < notes.length; i += 3) out.push(notes.slice(i, i + 3));
 		return out;
 	});
@@ -34,58 +34,33 @@
 	before you remember what you typed under it.
 -->
 <section class="mb-3 rounded-[22px] px-3.5 pt-3 pb-2.5" style="background: var(--color-surface-2);">
-	<!-- "+" belongs to the tag, not to a row inside it. Every note in this card
-	     is a peer, so adding to any one of them would mean the same thing —
-	     writing another note into #tag — and a button per row would just be the
-	     same action offered three times with a false implication of "under
-	     this one". -->
-	<div class="flex items-center gap-2">
-		<a
-			href={`/?tag=${encodeURIComponent(tag.name)}`}
-			class="flex min-w-0 flex-1 items-center gap-2 active:opacity-60"
+	<a
+		href={`/?tag=${encodeURIComponent(tag.name)}`}
+		class="flex items-center gap-2 active:opacity-60"
+	>
+		<span class="tag tag-lg min-w-0 truncate">#{tag.name}</span>
+		<span
+			class="shrink-0 text-[0.82rem] font-bold tabular-nums"
+			style="color: var(--color-ink-faint);">{count}</span
 		>
-			<span class="tag tag-lg min-w-0 truncate">#{tag.name}</span>
-			<span
-				class="shrink-0 text-[0.82rem] font-bold tabular-nums"
-				style="color: var(--color-ink-faint);">{count}</span
-			>
-			<span class="flex-1"></span>
-			<span
-				class="grid h-6 w-6 shrink-0 place-items-center rounded-full"
-				style="background: var(--color-surface); color: var(--color-ink-muted);"
-				aria-hidden="true"
-			>
-				<svg
-					width="12"
-					height="12"
-					viewBox="0 0 24 24"
-					fill="none"
-					stroke="currentColor"
-					stroke-width="3"
-					stroke-linecap="round"
-					stroke-linejoin="round"><path d="m9 5 7 7-7 7" /></svg
-				>
-			</span>
-		</a>
-
-		<button
-			type="button"
-			aria-label={`Write a thought in #${tag.name}`}
-			class="grid h-[30px] w-[30px] shrink-0 place-items-center rounded-full active:scale-90"
-			style="background: var(--color-accent-soft); color: var(--color-accent);"
-			onclick={() => openIn(tag.name)}
+		<span class="flex-1"></span>
+		<span
+			class="grid h-6 w-6 shrink-0 place-items-center rounded-full"
+			style="background: var(--color-surface); color: var(--color-ink-muted);"
+			aria-hidden="true"
 		>
 			<svg
-				width="15"
-				height="15"
+				width="12"
+				height="12"
 				viewBox="0 0 24 24"
 				fill="none"
 				stroke="currentColor"
 				stroke-width="3"
-				stroke-linecap="round"><path d="M12 5v14M5 12h14" /></svg
+				stroke-linecap="round"
+				stroke-linejoin="round"><path d="m9 5 7 7-7 7" /></svg
 			>
-		</button>
-	</div>
+		</span>
+	</a>
 
 	<div
 		class="mt-1.5 flex snap-x snap-mandatory gap-3 overflow-x-auto"
@@ -96,7 +71,7 @@
 				{#each pageNotes as note (note.id)}
 					<div class="flex items-center gap-3 py-1.5">
 						<a
-							href={`/note/${note.id}?group=${encodeURIComponent(tag.name)}`}
+							href={`/note/${note.id}`}
 							class="flex min-w-0 flex-1 items-center gap-3 active:opacity-60"
 						>
 							{#if note.image}
@@ -131,13 +106,41 @@
 											>{note.source}</span
 										>
 									{/if}
-									<span
-										class="shrink-0 text-[0.68rem] font-bold"
-										style="color: var(--color-ink-faint);">{relativeTime(note.at)}</span
-									>
+									{#if note.count > 0}
+										<span
+											class="shrink-0 rounded-full px-1.5 py-0.5 text-[0.68rem] font-bold whitespace-nowrap"
+											style="background: var(--color-accent-soft); color: var(--color-accent);"
+											>{note.count} more</span
+										>
+									{:else}
+										<span
+											class="shrink-0 text-[0.68rem] font-bold"
+											style="color: var(--color-ink-faint);">{relativeTime(note.at)}</span
+										>
+									{/if}
 								</span>
 							</span>
 						</a>
+
+						<!-- Where the App Store puts "View", because that's where your
+						     thumb already is. Different verb: this one writes. -->
+						<button
+							type="button"
+							aria-label={`Add a thought to "${note.label}"`}
+							class="grid h-[30px] w-[30px] shrink-0 place-items-center rounded-full active:scale-90"
+							style="background: var(--color-surface); color: var(--color-ink-muted);"
+							onclick={() => writeInto(note)}
+						>
+							<svg
+								width="14"
+								height="14"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="3"
+								stroke-linecap="round"><path d="M12 5v14M5 12h14" /></svg
+							>
+						</button>
 					</div>
 				{/each}
 			</div>

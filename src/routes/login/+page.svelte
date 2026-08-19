@@ -53,7 +53,10 @@
 			</div>
 		{:else}
 			{#if mode !== 'magic'}
-				<div class="mb-5 flex rounded-full p-1" style="background: var(--color-surface-2);">
+				<div
+					class="mb-5 flex rounded-full p-1"
+					style="background: var(--color-surface-2);"
+				>
 					<button
 						type="button"
 						onclick={() => (mode = 'password')}
@@ -127,11 +130,7 @@
 					{#if submitting}
 						{mode === 'magic' ? 'Sending…' : mode === 'signup' ? 'Creating…' : 'Signing in…'}
 					{:else}
-						{mode === 'magic'
-							? 'Send magic link'
-							: mode === 'signup'
-								? 'Create account'
-								: 'Sign in'}
+						{mode === 'magic' ? 'Send magic link' : mode === 'signup' ? 'Create account' : 'Sign in'}
 					{/if}
 				</button>
 
