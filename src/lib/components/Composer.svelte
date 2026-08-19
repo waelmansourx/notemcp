@@ -320,109 +320,111 @@
 
 <!-- ---------------- collapsed bar ---------------- -->
 <div
-	class="pointer-events-none fixed inset-x-0 bottom-0 z-20 flex flex-col gap-2 px-[18px] pt-10"
+	class="pointer-events-none fixed inset-x-0 bottom-0 z-20 flex flex-col items-center px-[18px] pt-10"
 	style="background: linear-gradient(180deg, transparent 0%, color-mix(in srgb, var(--color-bg) 90%, transparent) 42%, var(--color-bg) 68%); padding-bottom: calc(1.75rem + env(safe-area-inset-bottom));"
 	class:opacity-0={open || recording}
 >
-	<!-- You are in a thread. This is the only thing on screen that says so
-	     while the sheet is closed, so it sits directly above the bar you're
-	     about to type into and carries its own way out. -->
-	{#if target}
-		<div class="flex" transition:fly={{ y: 8, duration: 180 }}>
+	<div class="flex w-full max-w-2xl flex-col gap-2">
+		<!-- You are in a thread. This is the only thing on screen that says so
+		     while the sheet is closed, so it sits directly above the bar you're
+		     about to type into and carries its own way out. -->
+		{#if target}
+			<div class="flex" transition:fly={{ y: 8, duration: 180 }}>
+				<div
+					class="pointer-events-auto flex min-w-0 items-center gap-1.5 rounded-full py-1.5 pr-1.5 pl-3"
+					style="background: var(--color-accent-soft);"
+				>
+					<span class="shrink-0 text-[0.8rem] leading-none" style="color: var(--color-accent);"
+						>&#8627;</span
+					>
+					<button
+						type="button"
+						class="min-w-0 truncate text-[0.78rem] font-bold tracking-[-0.015em]"
+						style="color: var(--color-accent);"
+						onclick={openSheet}
+					>
+						{barLabel}
+					</button>
+					<button
+						type="button"
+						aria-label="Stop adding to this thought"
+						class="grid h-5 w-5 shrink-0 place-items-center rounded-full text-[0.62rem] active:scale-90"
+						style="background: color-mix(in srgb, var(--color-accent) 16%, transparent); color: var(--color-accent);"
+						onclick={detach}
+					>
+						&#10005;
+					</button>
+				</div>
+			</div>
+		{/if}
+
+		<div class="flex items-center gap-2">
 			<div
-				class="pointer-events-auto flex min-w-0 items-center gap-1.5 rounded-full py-1.5 pr-1.5 pl-3"
-				style="background: var(--color-accent-soft);"
+				class="pointer-events-auto flex h-[62px] flex-1 cursor-text touch-manipulation items-center rounded-[22px] pr-2 pl-[22px]"
+				style="background: var(--color-accent); color: var(--color-accent-ink); box-shadow: 0 10px 26px rgba(20,80,58,.26);"
+				onclick={openSheet}
+				onkeydown={(e) => e.key === 'Enter' && openSheet()}
+				role="button"
+				tabindex="0"
 			>
-				<span class="shrink-0 text-[0.8rem] leading-none" style="color: var(--color-accent);"
-					>&#8627;</span
-				>
+				<span class="flex-1 truncate text-[1.05rem] font-bold tracking-[-0.02em] opacity-95">
+					{#if target}
+						Add to this thought…
+					{:else if contextTag}
+						Write in #{contextTag}…
+					{:else}
+						Write something…
+					{/if}
+				</span>
 				<button
 					type="button"
-					class="min-w-0 truncate text-[0.78rem] font-bold tracking-[-0.015em]"
-					style="color: var(--color-accent);"
-					onclick={openSheet}
+					aria-label="Record a thought"
+					class="grid h-[46px] w-[46px] shrink-0 place-items-center rounded-[14px] active:scale-95"
+					style="background: rgba(255,255,255,.16); color: var(--color-accent-ink);"
+					onclick={(e) => {
+						e.stopPropagation();
+						startRecording();
+					}}
 				>
-					{barLabel}
-				</button>
-				<button
-					type="button"
-					aria-label="Stop adding to this thought"
-					class="grid h-5 w-5 shrink-0 place-items-center rounded-full text-[0.62rem] active:scale-90"
-					style="background: color-mix(in srgb, var(--color-accent) 16%, transparent); color: var(--color-accent);"
-					onclick={detach}
-				>
-					&#10005;
+					<svg
+						width="20"
+						height="20"
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="2"
+						stroke-linecap="round"
+						><rect x="9" y="3" width="6" height="11" rx="3" /><path
+							d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"
+						/></svg
+					>
 				</button>
 			</div>
-		</div>
-	{/if}
 
-	<div class="flex items-center gap-2">
-		<div
-			class="pointer-events-auto flex h-[62px] flex-1 cursor-text touch-manipulation items-center rounded-[22px] pr-2 pl-[22px]"
-			style="background: var(--color-accent); color: var(--color-accent-ink); box-shadow: 0 10px 26px rgba(20,80,58,.26);"
-			onclick={openSheet}
-			onkeydown={(e) => e.key === 'Enter' && openSheet()}
-			role="button"
-			tabindex="0"
-		>
-			<span class="flex-1 truncate text-[1.05rem] font-bold tracking-[-0.02em] opacity-95">
-				{#if target}
-					Add to this thought…
-				{:else if contextTag}
-					Write in #{contextTag}…
-				{:else}
-					Write something…
-				{/if}
-			</span>
 			<button
 				type="button"
-				aria-label="Record a thought"
-				class="grid h-[46px] w-[46px] shrink-0 place-items-center rounded-[14px] active:scale-95"
-				style="background: rgba(255,255,255,.16); color: var(--color-accent-ink);"
-				onclick={(e) => {
-					e.stopPropagation();
-					startRecording();
-				}}
+				aria-label="Search and filter"
+				class="pointer-events-auto grid h-[62px] w-[62px] shrink-0 place-items-center rounded-[22px] active:scale-95"
+				style="background: var(--color-surface); border: 1px solid var(--color-border); box-shadow: 0 3px 12px rgba(0,0,0,.055); color: var(--color-ink-2);"
+				onclick={search}
 			>
 				<svg
-					width="20"
-					height="20"
+					width="22"
+					height="22"
 					viewBox="0 0 24 24"
 					fill="none"
 					stroke="currentColor"
-					stroke-width="2"
-					stroke-linecap="round"
-					><rect x="9" y="3" width="6" height="11" rx="3" /><path
-						d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"
-					/></svg
+					stroke-width="2.2"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg
 				>
 			</button>
 		</div>
-
-		<button
-			type="button"
-			aria-label="Search and filter"
-			class="pointer-events-auto grid h-[62px] w-[62px] shrink-0 place-items-center rounded-[22px] active:scale-95"
-			style="background: var(--color-surface); border: 1px solid var(--color-border); box-shadow: 0 3px 12px rgba(0,0,0,.055); color: var(--color-ink-2);"
-			onclick={search}
-		>
-			<svg
-				width="22"
-				height="22"
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				stroke-width="2.2"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg
-			>
-		</button>
 	</div>
 </div>
 
 <!-- ---------------- recording ---------------- -->
 {#if recording}
 	<div
-		class="safe-bottom fixed inset-x-[18px] bottom-5 z-30 flex items-center gap-3 rounded-[0.88rem] px-4 py-3"
+		class="safe-bottom fixed inset-x-[18px] bottom-5 z-30 mx-auto flex max-w-2xl items-center gap-3 rounded-[0.88rem] px-4 py-3"
 		style="background: var(--color-accent); color: var(--color-accent-ink);"
 	>
 		<span class="h-2.5 w-2.5 shrink-0 animate-pulse rounded-full" style="background: #ff7b7b;"
@@ -493,7 +495,7 @@
 	></div>
 
 	<div
-		class="fixed inset-x-0 bottom-0 z-40 flex max-h-[80vh] flex-col rounded-t-[1.375rem] px-[1.125rem] pt-[0.625rem]"
+		class="fixed inset-x-0 bottom-0 z-40 mx-auto flex max-h-[80vh] max-w-2xl flex-col rounded-t-[1.375rem] px-[1.125rem] pt-[0.625rem]"
 		style="background: var(--color-surface); box-shadow: 0 -8px 34px rgba(0,0,0,.16); padding-bottom: calc(0.25rem + env(safe-area-inset-bottom));"
 		transition:fly={{ y: 420, duration: 320, easing: quintOut }}
 	>
