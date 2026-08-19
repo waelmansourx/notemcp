@@ -8,6 +8,7 @@
 	import { normalizeTagName } from '$lib/tags';
 	import { continuation, detach, touch, restore } from '$lib/composer.svelte';
 	import { saveDraft, readDraft, clearDraft } from '$lib/draft.svelte';
+	import { beginMediaUpload, type PendingMedia } from '$lib/media';
 	import TagPicker from './TagPicker.svelte';
 	import type { Tag } from '$lib/types';
 	import { onMount } from 'svelte';
@@ -53,11 +54,19 @@
 	let interim = $state('');
 	let voiceError = $state('');
 
-	// Same base64-data-URL approach the share-target flow already uses for a
-	// shared photo (src/routes/capture/+page.svelte) — no storage bucket to
-	// stand up, and the outbox already falls back off keepalive for a big body.
+	// Attach uploads straight to R2 (see ADR-001) so the note body carries a
+	// tiny reference instead of megabytes of base64 — never the latter, not
+	// even as a fallback. photoDataUrl is read locally for an instant preview
+	// only and is never written into saved content. photoMediaId becomes
+	// available the moment the (fast) signing request resolves, well before
+	// the bytes have actually finished uploading — save() awaits
+	// photoUploadStart itself only if it hasn't resolved yet, so a save is
+	// blocked on a small JSON round trip at worst, never on the upload.
 	let photoInput = $state<HTMLInputElement | null>(null);
 	let photoDataUrl = $state<string | null>(null);
+	let photoMediaId = $state<string | null>(null);
+	let photoUploadStart = $state<Promise<PendingMedia> | null>(null);
+	let photoUploadError = $state(false);
 	let photoTooLarge = $state(false);
 	const MAX_PHOTO_BYTES = 4 * 1024 * 1024;
 
@@ -154,7 +163,13 @@
 		else closeSheet();
 	}
 
-	type DiscardSnapshot = { text: string; photoDataUrl: string | null; selected: string[] };
+	type DiscardSnapshot = {
+		text: string;
+		photoDataUrl: string | null;
+		photoMediaId: string | null;
+		photoUploadStart: Promise<PendingMedia> | null;
+		selected: string[];
+	};
 	let pendingDiscard = $state<DiscardSnapshot | null>(null);
 	let discardTimer: ReturnType<typeof setTimeout> | null = null;
 	const DISCARD_UNDO_MS = 4000;
@@ -167,7 +182,7 @@
 		}
 
 		if (discardTimer) clearTimeout(discardTimer);
-		pendingDiscard = { text, photoDataUrl, selected };
+		pendingDiscard = { text, photoDataUrl, photoMediaId, photoUploadStart, selected };
 		discardTimer = setTimeout(() => {
 			pendingDiscard = null;
 			discardTimer = null;
@@ -186,6 +201,8 @@
 
 		text = pendingDiscard.text;
 		photoDataUrl = pendingDiscard.photoDataUrl;
+		photoMediaId = pendingDiscard.photoMediaId;
+		photoUploadStart = pendingDiscard.photoUploadStart;
 		selected = pendingDiscard.selected;
 		pendingDiscard = null;
 
@@ -206,28 +223,60 @@
 		photoTooLarge = file.size > MAX_PHOTO_BYTES;
 		if (photoTooLarge) return;
 
+		photoMediaId = null;
+		photoUploadError = false;
 		const reader = new FileReader();
 		reader.onload = () => {
 			photoDataUrl = reader.result as string;
 			textarea?.focus();
 		};
 		reader.readAsDataURL(file);
+
+		const started = beginMediaUpload(file, 'image');
+		photoUploadStart = started;
+		started
+			.then(({ id, whenUploaded }) => {
+				if (photoUploadStart !== started) return; // superseded by a later pick/clear
+				photoMediaId = id;
+				whenUploaded.catch(() => {
+					// The signed id never actually landed in R2 — embedding it
+					// would be a permanently broken image, which is worse than no
+					// image, so pull it back out if it hasn't been saved yet.
+					if (photoUploadStart !== started) return;
+					photoMediaId = null;
+					photoUploadError = true;
+				});
+			})
+			.catch(() => {
+				if (photoUploadStart === started) photoUploadError = true;
+			});
 	}
 
 	function clearPhoto() {
 		photoDataUrl = null;
+		photoMediaId = null;
+		photoUploadStart = null;
+		photoUploadError = false;
 		photoTooLarge = false;
 	}
 
 	function buildContent(): string {
 		const parts: string[] = [];
-		if (photoDataUrl) parts.push(`![](${photoDataUrl})`);
+		if (photoMediaId) parts.push(`![](/api/media/${photoMediaId})`);
 		const t = text.trim();
 		if (t) parts.push(t);
 		return parts.join('\n\n');
 	}
 
-	function save() {
+	async function save() {
+		// The id normally beats this by a wide margin — it only needs the
+		// signing round trip, not the upload — but if Save is tapped in that
+		// narrow window, wait for it rather than either blocking on the full
+		// upload or silently dropping the photo.
+		if (photoDataUrl && !photoMediaId && photoUploadStart && !photoUploadError) {
+			await photoUploadStart.catch(() => {});
+		}
+
 		const content = buildContent();
 		if (!content) return;
 
@@ -629,6 +678,11 @@
 	{#if photoTooLarge}
 		<p class="mb-2 shrink-0 text-[0.78rem]" style="color: var(--color-danger);">
 			That photo's too large to attach right now (4MB max).
+		</p>
+	{/if}
+	{#if photoUploadError}
+		<p class="mb-2 shrink-0 text-[0.78rem]" style="color: var(--color-danger);">
+			Couldn't upload that photo — check your connection and try again.
 		</p>
 	{/if}
 

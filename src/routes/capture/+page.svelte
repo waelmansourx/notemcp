@@ -7,6 +7,7 @@
 	import { queueNote, syncEntryNow } from '$lib/outbox';
 	import { addPending, removePending } from '$lib/stream.svelte';
 	import { continuation, detach, restore, touch } from '$lib/composer.svelte';
+	import { beginMediaUpload } from '$lib/media';
 	import { QUICK_TAGS, type Tag } from '$lib/types';
 	import { fly, fade } from 'svelte/transition';
 	import { quintOut } from 'svelte/easing';
@@ -34,8 +35,16 @@
 	let previewLoading = $state(false);
 
 	// A shared screenshot/photo, pulled out of Cache Storage where the
-	// service worker stashed it (see src/service-worker.ts).
+	// service worker stashed it (see src/service-worker.ts) and uploaded to
+	// R2 in the background (see ADR-001). sharedImageDataUrl is a local
+	// preview only — never written into the saved note, which instead gets
+	// the stable /api/media/{id} ref as soon as the (fast) signing request
+	// resolves. If sharing happens with genuinely no connection, that
+	// request never resolves either, and the note saves as text-only rather
+	// than embedding the raw bytes.
 	let sharedImageDataUrl = $state<string | null>(null);
+	let sharedImageMediaId = $state<string | null>(null);
+	let sharedImageUploadStart: ReturnType<typeof beginMediaUpload> | null = null;
 	let sharedImageTooLarge = $state(false);
 	let sharedImageLoading = $state(!!sharedId);
 
@@ -116,6 +125,22 @@
 						reader.onerror = reject;
 						reader.readAsDataURL(blob);
 					});
+
+					// Best-effort — if signing fails (offline, R2 down), there's no
+					// id to embed and save() proceeds without the image rather
+					// than falling back to a base64 embed.
+					const started = beginMediaUpload(blob, 'image');
+					sharedImageUploadStart = started;
+					started
+						.then(({ id, whenUploaded }) => {
+							sharedImageMediaId = id;
+							whenUploaded.catch(() => {
+								// Never landed in R2 — don't leave a permanently broken
+								// ref in the note if it hasn't been saved yet.
+								if (sharedImageMediaId === id) sharedImageMediaId = null;
+							});
+						})
+						.catch(() => {});
 				} catch {
 					// no image ever arrives — just proceed as a text-only capture
 				} finally {
@@ -127,7 +152,7 @@
 
 	function buildContent(): string {
 		const parts: string[] = [];
-		if (sharedImageDataUrl) parts.push(`![Shared image](${sharedImageDataUrl})`);
+		if (sharedImageMediaId) parts.push(`![Shared image](/api/media/${sharedImageMediaId})`);
 		if (caption.trim()) parts.push(caption.trim());
 		return parts.join('\n\n');
 	}
@@ -148,10 +173,17 @@
 		window.close();
 	}
 
-	function save(tagNames: string[], key: string) {
+	async function save(tagNames: string[], key: string) {
 		if (submitted) return;
 		submitted = true;
 		savedTag = key;
+
+		// A tag tap here can easily beat the signing round trip (there's no
+		// typing pause like the in-app composer has), so wait for it — never
+		// for the full upload, just the fast id-issuing step.
+		if (sharedImageDataUrl && !sharedImageMediaId && !sharedImageTooLarge) {
+			await sharedImageUploadStart?.catch(() => {});
+		}
 
 		const entry = queueNote({
 			title: displayTitle,
