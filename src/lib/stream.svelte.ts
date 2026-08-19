@@ -25,6 +25,7 @@ export function asNote(entry: OutboxEntry): Note {
 		source_title: entry.source_title,
 		source_description: entry.source_description,
 		source_image: entry.source_image,
+		parent_id: entry.parent_id,
 		folder_id: null,
 		pinned: false,
 		archived: false,
@@ -49,13 +50,60 @@ export function removePending(clientId: string) {
 }
 
 /**
- * Merge queued notes into a loaded list. A note that has already come back
- * from the server is dropped from the pending side by `client_id`, so the
- * hand-off between the two is invisible rather than a flicker of duplicates.
+ * Merge queued notes into a loaded stream of threads.
+ *
+ * A note that has already come back from the server is dropped from the
+ * pending side by `client_id`, so the hand-off between the two is invisible
+ * rather than a flicker of duplicates.
+ *
+ * A queued *continuation* is folded into the thread it belongs to and that
+ * thread moves to the top — the same thing the server's trigger will do a
+ * moment later. Appending has to look like appending straight away, or the
+ * gesture reads as having gone nowhere.
  */
-export function withPending(notes: Note[]): Note[] {
-	if (pending.items.length === 0) return notes;
-	const known = new Set(notes.map((n) => n.client_id).filter(Boolean));
-	const queued = pending.items.filter((n) => !known.has(n.client_id));
-	return queued.length > 0 ? [...queued, ...notes] : notes;
+export function withPending(roots: Note[]): Note[] {
+	if (pending.items.length === 0) return roots;
+
+	const known = new Set<string>();
+	for (const root of roots) {
+		if (root.client_id) known.add(root.client_id);
+		for (const child of root.children ?? []) if (child.client_id) known.add(child.client_id);
+	}
+
+	const queued = pending.items.filter((n) => !(n.client_id && known.has(n.client_id)));
+	if (queued.length === 0) return roots;
+
+	const appended = new Map<string, Note[]>();
+	const fresh: Note[] = [];
+	for (const note of queued) {
+		if (!note.parent_id) {
+			fresh.push(note);
+			continue;
+		}
+		const list = appended.get(note.parent_id);
+		if (list) list.push(note);
+		else appended.set(note.parent_id, [note]);
+	}
+
+	if (appended.size === 0) return [...fresh, ...roots];
+
+	// Threads that just gained a thought come first, in the order they were
+	// touched, then everything else as it was.
+	const touched: Note[] = [];
+	const rest: Note[] = [];
+	for (const root of roots) {
+		const added = appended.get(root.id);
+		if (!added) {
+			rest.push(root);
+			continue;
+		}
+		appended.delete(root.id);
+		touched.push({ ...root, children: [...(root.children ?? []), ...added] });
+	}
+
+	// A continuation whose thread isn't in this window still has to be
+	// visible, so it stands on its own rather than disappearing.
+	const orphans = [...appended.values()].flat();
+
+	return [...fresh, ...orphans, ...touched, ...rest];
 }

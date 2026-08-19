@@ -7,9 +7,11 @@
 </script>
 
 <svelte:head>
-	<title>{data.note.title.trim() || firstLine(data.note.content_markdown) || 'Note'} · NoteMCP</title>
+	<title
+		>{data.note.title.trim() || firstLine(data.note.content_markdown) || 'Note'} · NoteMCP</title
+	>
 </svelte:head>
 
 {#key data.note.id}
-	<NoteEditor existingNote={data.note} />
+	<NoteEditor existingNote={data.note} thoughts={data.thoughts} parent={data.parent} />
 {/key}

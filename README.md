@@ -4,6 +4,21 @@ Capture without deciding. A mobile-first notes app built for people working alon
 
 This is the one-night validation build: Supabase auth + persistence, a chronological note river, an installable PWA, and an Android Web Share Target capture screen.
 
+## Threads
+
+A second thought about something you already wrote doesn't need a new note, and
+shouldn't cost a trip to go and find the old one. So notes thread: a
+continuation is an ordinary note carrying `parent_id`, and a thread is
+assembled at read time (`src/lib/thread.ts`).
+
+You never create a thread — one exists the moment you add to a note twice. The
+composer offers the threads you might be writing into (`Continue` strip),
+stays attached to the last one for 30 minutes the way a chat window stays open
+(`src/lib/composer.svelte.ts`), and every row in the stream carries a `+` that
+attaches the composer without opening the note. Threads are flat, enforced by a
+database trigger: pointing at a continuation resolves to the note it belongs
+to.
+
 ## Stack
 
 - SvelteKit (Svelte 5, runes) + Tailwind v4

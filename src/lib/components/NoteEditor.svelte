@@ -3,15 +3,24 @@
 	import { goto } from '$app/navigation';
 	import MarkdownEditor from '$lib/components/MarkdownEditor.svelte';
 	import EditorToolbar from '$lib/components/EditorToolbar.svelte';
-	import { hostname } from '$lib/dates';
+	import { hostname, timeOfDay } from '$lib/dates';
 	import { clearDraft, isNewerThan, pruneDrafts, readDraft, saveDraft } from '$lib/draft.svelte';
+	import { excerpt, extractLeadingImage } from '$lib/markdown';
+	import { stubOf } from '$lib/thread';
+	import { writeInto } from '$lib/composer.svelte';
 	import type { Note } from '$lib/types';
 
 	let {
 		existingNote = null,
-		prefill = null
+		prefill = null,
+		thoughts = [],
+		parent = null
 	}: {
 		existingNote?: Note | null;
+		/** The rest of this thread, oldest first. */
+		thoughts?: Note[];
+		/** Set when this note is itself a continuation of another. */
+		parent?: { id: string; label: string } | null;
 		prefill?: {
 			title?: string;
 			content_markdown?: string;
@@ -500,7 +509,7 @@
 				editor?.focusEditor();
 			}
 		}}
-		class="font-serif mb-1.5 w-full resize-none overflow-hidden bg-transparent text-xl font-semibold tracking-tight outline-none"
+		class="mb-1.5 w-full resize-none overflow-hidden bg-transparent font-serif text-xl font-semibold tracking-tight outline-none"
 		style="color: var(--color-ink);"></textarea>
 
 	<MarkdownEditor bind:this={editor} bind:value={content} bind:focused={editorFocused} />
@@ -578,4 +587,82 @@
 			/>
 		{/if}
 	</div>
+
+	<!--
+		The rest of the thread, below the note it belongs to.
+
+		Read-only on purpose: each thought is its own note with its own page,
+		and merging them into one editable body would throw away the timestamps
+		that make a thread readable as something that happened over time.
+	-->
+	{#if parent}
+		<a
+			href={`/note/${parent.id}`}
+			class="mt-7 flex items-center gap-1.5 text-[0.78rem] font-bold active:opacity-60"
+			style="color: var(--color-accent);"
+		>
+			<span aria-hidden="true">&#8624;</span>
+			<span class="min-w-0 truncate">Part of “{parent.label}”</span>
+		</a>
+	{/if}
+
+	{#if thoughts.length > 0}
+		<div class="mt-7 border-t pt-4" style="border-color: var(--color-border);">
+			<p
+				class="mb-3 text-[0.7rem] font-extrabold tracking-[0.13em] uppercase"
+				style="color: var(--color-ink-faint);"
+			>
+				{thoughts.length}
+				{thoughts.length === 1 ? 'thought since' : 'thoughts since'}
+			</p>
+
+			<div class="space-y-4 border-l pl-3.5" style="border-color: var(--color-border);">
+				{#each thoughts as thought (thought.id)}
+					{@const inner = extractLeadingImage(thought.content_markdown)}
+					<a href={`/note/${thought.id}`} class="block active:opacity-60">
+						<div class="flex items-start gap-3">
+							{#if thought.source_image || inner.image}
+								<img
+									src={thought.source_image || inner.image}
+									alt=""
+									loading="lazy"
+									class="h-12 w-12 shrink-0 rounded-[14px] object-cover"
+									style="background: var(--color-surface-2);"
+								/>
+							{/if}
+							<p class="min-w-0 flex-1 font-serif text-[1.05rem] leading-[1.5] whitespace-pre-wrap">
+								{thought.source_title?.trim() || excerpt(inner.rest, 400) || 'Untitled'}
+							</p>
+						</div>
+						<p class="mt-1 text-[0.72rem] font-bold" style="color: var(--color-ink-faint);">
+							{timeOfDay(thought.created_at)}
+						</p>
+					</a>
+				{/each}
+			</div>
+		</div>
+	{/if}
+
+	{#if existingNote && !parent}
+		<button
+			type="button"
+			class="mt-5 flex items-center gap-2 self-start rounded-full py-2 pr-4 pl-3 text-[0.82rem] font-bold active:scale-95"
+			style="background: var(--color-accent-soft); color: var(--color-accent);"
+			onclick={() => {
+				writeInto(stubOf(existingNote));
+				goto('/');
+			}}
+		>
+			<svg
+				width="14"
+				height="14"
+				viewBox="0 0 24 24"
+				fill="none"
+				stroke="currentColor"
+				stroke-width="3"
+				stroke-linecap="round"><path d="M12 5v14M5 12h14" /></svg
+			>
+			Add a thought
+		</button>
+	{/if}
 </div>

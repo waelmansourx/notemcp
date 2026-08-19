@@ -16,6 +16,9 @@ export interface Note {
 	source_title: string | null;
 	source_description: string | null;
 	source_image: string | null;
+	/** The note this one continues, when it isn't the first thought in a
+	 *  thread. Threads are flat: a continuation never has continuations. */
+	parent_id: string | null;
 	folder_id: string | null;
 	pinned: boolean;
 	archived: boolean;
@@ -23,6 +26,26 @@ export interface Note {
 	updated_at: string;
 	deleted_at: string | null;
 	tags: Tag[];
+	/** Thoughts appended to this one, oldest first. Only ever set on the note
+	 *  at the head of a thread, and only by the loaders that assemble one. */
+	children?: Note[];
 }
 
 export const QUICK_TAGS = ['inspo', 'blog', 'code', 'read', 'idea'] as const;
+
+/**
+ * Just enough of a thread to offer it as somewhere to write.
+ *
+ * The composer's recent strip needs a picture, a handle and a count — never a
+ * note's body, which for a captured photo is a base64 data URL running to
+ * megabytes. Built on the server from the `preview` computed column.
+ */
+export interface ThreadStub {
+	id: string;
+	label: string;
+	image: string | null;
+	source: string | null;
+	/** Thoughts added since the first one. */
+	count: number;
+	at: string;
+}

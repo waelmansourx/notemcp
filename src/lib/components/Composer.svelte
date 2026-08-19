@@ -6,7 +6,9 @@
 	import { queueNote, syncEntry } from '$lib/outbox';
 	import { addPending, removePending } from '$lib/stream.svelte';
 	import { normalizeTagName } from '$lib/tags';
-	import type { Tag } from '$lib/types';
+	import { continuation, attach, detach, touch, restore } from '$lib/composer.svelte';
+	import type { Tag, ThreadStub } from '$lib/types';
+	import { onMount } from 'svelte';
 	import { fly, fade, scale } from 'svelte/transition';
 	import { quintOut } from 'svelte/easing';
 
@@ -32,6 +34,35 @@
 	const MAX_PHOTO_BYTES = 4 * 1024 * 1024;
 
 	let hasContent = $derived(text.trim().length > 0 || Boolean(photoDataUrl));
+
+	/* ---------------- continuing an earlier thought ---------------- */
+
+	// The threads on offer, loaded once in the root layout so they're the same
+	// wherever the composer is. The one you're already in is dropped from the
+	// row — it's shown as the chip above instead.
+	let recentThreads = $derived(
+		((page.data.recentThreads ?? []) as ThreadStub[]).filter(
+			(t) => t.id !== continuation.target?.id
+		)
+	);
+
+	let target = $derived(continuation.target);
+
+	// Short enough to sit in the collapsed bar next to a mic button.
+	let barLabel = $derived(
+		target ? (target.label.length > 24 ? target.label.slice(0, 23) + '…' : target.label) : ''
+	);
+
+	onMount(restore);
+
+	// Tapping "+" on a thread both attaches it and opens the sheet — including
+	// from a screen with no composer on it, since the request survives until
+	// something is there to answer it.
+	$effect(() => {
+		if (!continuation.pendingOpen) return;
+		continuation.pendingOpen = false;
+		openSheet();
+	});
 
 	// Tags typed during this session, newest first. A tag you just invented is
 	// the one you're most likely to want again in the next thought, so it goes
@@ -210,8 +241,13 @@
 			source_title: null,
 			source_description: null,
 			source_image: null,
+			parent_id: continuation.target?.id ?? null,
 			tagNames: selected.map(normalizeTagName).filter(Boolean)
 		});
+
+		// Still in the same thread afterwards: three thoughts in a row are one
+		// train of thought, not three separate decisions.
+		touch();
 
 		// Show it in the stream now. The POST is already on its way and the
 		// entry is durable in localStorage either way, so there is nothing
@@ -343,62 +379,103 @@
 
 <!-- ---------------- collapsed bar ---------------- -->
 <div
-	class="pointer-events-none fixed inset-x-0 bottom-0 z-20 flex items-center gap-2 px-[18px] pt-10"
+	class="pointer-events-none fixed inset-x-0 bottom-0 z-20 flex flex-col gap-2 px-[18px] pt-10"
 	style="background: linear-gradient(180deg, transparent 0%, color-mix(in srgb, var(--color-bg) 90%, transparent) 42%, var(--color-bg) 68%); padding-bottom: calc(1.75rem + env(safe-area-inset-bottom));"
 	class:opacity-0={open || recording}
 >
-	<div
-		class="pointer-events-auto flex h-[62px] flex-1 cursor-text touch-manipulation items-center rounded-[22px] pr-2 pl-[22px]"
-		style="background: var(--color-accent); color: var(--color-accent-ink); box-shadow: 0 10px 26px rgba(20,80,58,.26);"
-		onclick={openSheet}
-		onkeydown={(e) => e.key === 'Enter' && openSheet()}
-		role="button"
-		tabindex="0"
-	>
-		<span class="flex-1 text-[1.05rem] font-bold tracking-[-0.02em] opacity-95">
-			{contextTag ? `Write in #${contextTag}…` : 'Write something…'}
-		</span>
+	<!-- You are in a thread. This is the only thing on screen that says so
+	     while the sheet is closed, so it sits directly above the bar you're
+	     about to type into and carries its own way out. -->
+	{#if target}
+		<div class="flex" transition:fly={{ y: 8, duration: 180 }}>
+			<div
+				class="pointer-events-auto flex min-w-0 items-center gap-1.5 rounded-full py-1.5 pr-1.5 pl-3"
+				style="background: var(--color-accent-soft);"
+			>
+				<span class="shrink-0 text-[0.8rem] leading-none" style="color: var(--color-accent);"
+					>&#8627;</span
+				>
+				<button
+					type="button"
+					class="min-w-0 truncate text-[0.78rem] font-bold tracking-[-0.015em]"
+					style="color: var(--color-accent);"
+					onclick={openSheet}
+				>
+					{barLabel}
+				</button>
+				<button
+					type="button"
+					aria-label="Stop adding to this thought"
+					class="grid h-5 w-5 shrink-0 place-items-center rounded-full text-[0.62rem] active:scale-90"
+					style="background: color-mix(in srgb, var(--color-accent) 16%, transparent); color: var(--color-accent);"
+					onclick={detach}
+				>
+					&#10005;
+				</button>
+			</div>
+		</div>
+	{/if}
+
+	<div class="flex items-center gap-2">
+		<div
+			class="pointer-events-auto flex h-[62px] flex-1 cursor-text touch-manipulation items-center rounded-[22px] pr-2 pl-[22px]"
+			style="background: var(--color-accent); color: var(--color-accent-ink); box-shadow: 0 10px 26px rgba(20,80,58,.26);"
+			onclick={openSheet}
+			onkeydown={(e) => e.key === 'Enter' && openSheet()}
+			role="button"
+			tabindex="0"
+		>
+			<span class="flex-1 truncate text-[1.05rem] font-bold tracking-[-0.02em] opacity-95">
+				{#if target}
+					Add to this thought…
+				{:else if contextTag}
+					Write in #{contextTag}…
+				{:else}
+					Write something…
+				{/if}
+			</span>
+			<button
+				type="button"
+				aria-label="Record a thought"
+				class="grid h-[46px] w-[46px] shrink-0 place-items-center rounded-[14px] active:scale-95"
+				style="background: rgba(255,255,255,.16); color: var(--color-accent-ink);"
+				onclick={(e) => {
+					e.stopPropagation();
+					startRecording();
+				}}
+			>
+				<svg
+					width="20"
+					height="20"
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="2"
+					stroke-linecap="round"
+					><rect x="9" y="3" width="6" height="11" rx="3" /><path
+						d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"
+					/></svg
+				>
+			</button>
+		</div>
+
 		<button
 			type="button"
-			aria-label="Record a thought"
-			class="grid h-[46px] w-[46px] shrink-0 place-items-center rounded-[14px] active:scale-95"
-			style="background: rgba(255,255,255,.16); color: var(--color-accent-ink);"
-			onclick={(e) => {
-				e.stopPropagation();
-				startRecording();
-			}}
+			aria-label="Search and filter"
+			class="pointer-events-auto grid h-[62px] w-[62px] shrink-0 place-items-center rounded-[22px] active:scale-95"
+			style="background: var(--color-surface); border: 1px solid var(--color-border); box-shadow: 0 3px 12px rgba(0,0,0,.055); color: var(--color-ink-2);"
+			onclick={search}
 		>
 			<svg
-				width="20"
-				height="20"
+				width="22"
+				height="22"
 				viewBox="0 0 24 24"
 				fill="none"
 				stroke="currentColor"
-				stroke-width="2"
-				stroke-linecap="round"
-				><rect x="9" y="3" width="6" height="11" rx="3" /><path
-					d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"
-				/></svg
+				stroke-width="2.2"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg
 			>
 		</button>
 	</div>
-
-	<button
-		type="button"
-		aria-label="Search and filter"
-		class="pointer-events-auto grid h-[62px] w-[62px] shrink-0 place-items-center rounded-[22px] active:scale-95"
-		style="background: var(--color-surface); border: 1px solid var(--color-border); box-shadow: 0 3px 12px rgba(0,0,0,.055); color: var(--color-ink-2);"
-		onclick={search}
-	>
-		<svg
-			width="22"
-			height="22"
-			viewBox="0 0 24 24"
-			fill="none"
-			stroke="currentColor"
-			stroke-width="2.2"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg
-		>
-	</button>
 </div>
 
 <!-- ---------------- recording ---------------- -->
@@ -488,6 +565,88 @@
 			<p class="mb-2 shrink-0 text-[0.78rem]" style="color: var(--color-ink-muted);">
 				{voiceError}
 			</p>
+		{/if}
+
+		<!--
+			Where this thought goes, offered before you write it.
+
+			Continuing an earlier note used to mean leaving the composer, finding
+			the note and opening it — three steps that each cost you the thought.
+			The threads come to you instead: one tap turns the draft into an
+			addition, and you never see or reload the note you're adding to.
+		-->
+		{#if target}
+			<div
+				class="mb-2.5 flex shrink-0 items-center gap-2 rounded-[14px] py-1.5 pr-1.5 pl-2.5"
+				style="background: var(--color-accent-soft);"
+			>
+				<span class="shrink-0 text-[0.85rem] leading-none" style="color: var(--color-accent);"
+					>&#8627;</span
+				>
+				{#if target.image}
+					<img
+						src={target.image}
+						alt=""
+						class="h-7 w-7 shrink-0 rounded-[8px] object-cover"
+						style="background: var(--color-surface-2);"
+					/>
+				{/if}
+				<span
+					class="min-w-0 flex-1 truncate text-[0.8rem] font-bold tracking-[-0.015em]"
+					style="color: var(--color-accent);"
+				>
+					{target.label}
+				</span>
+				<button
+					type="button"
+					aria-label="Write on its own instead"
+					class="grid h-6 w-6 shrink-0 place-items-center rounded-full text-[0.68rem] active:scale-90"
+					style="background: color-mix(in srgb, var(--color-accent) 16%, transparent); color: var(--color-accent);"
+					onclick={detach}
+				>
+					&#10005;
+				</button>
+			</div>
+		{:else if recentThreads.length > 0}
+			<div class="mb-2.5 flex shrink-0 items-center gap-2">
+				<span
+					class="shrink-0 text-[0.62rem] font-extrabold tracking-[0.13em] uppercase"
+					style="color: var(--color-ink-faint);">Continue</span
+				>
+				<div
+					class="flex min-w-0 flex-1 items-stretch gap-1.5 overflow-x-auto"
+					style="scrollbar-width: none;"
+				>
+					{#each recentThreads as thread (thread.id)}
+						<button
+							type="button"
+							class="flex w-[148px] shrink-0 items-center gap-2 rounded-[12px] p-1.5 text-left active:scale-[0.97]"
+							style="background: var(--color-surface-2);"
+							onclick={() => attach(thread)}
+						>
+							{#if thread.image}
+								<img
+									src={thread.image}
+									alt=""
+									loading="lazy"
+									class="h-7 w-7 shrink-0 rounded-[8px] object-cover"
+									style="background: var(--color-bg);"
+								/>
+							{:else}
+								<span
+									class="grid h-7 w-7 shrink-0 place-items-center rounded-[8px] text-[0.68rem] font-extrabold"
+									style="background: var(--color-accent-soft); color: var(--color-accent);"
+									aria-hidden="true">{thread.label.slice(0, 1).toUpperCase()}</span
+								>
+							{/if}
+							<span
+								class="line-clamp-2 min-w-0 flex-1 text-[0.71rem] leading-[1.22] font-semibold tracking-[-0.01em]"
+								>{thread.label}</span
+							>
+						</button>
+					{/each}
+				</div>
+			</div>
 		{/if}
 
 		<!-- Tags sit above the text. "+ Tag" is pinned first so it's always

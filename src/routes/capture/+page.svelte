@@ -6,6 +6,7 @@
 	import { QUICK_TAGS } from '$lib/types';
 	import { queueNote, syncEntryNow } from '$lib/outbox';
 	import { addPending, removePending } from '$lib/stream.svelte';
+	import { continuation, detach, restore, touch } from '$lib/composer.svelte';
 	import { fly, fade } from 'svelte/transition';
 	import { quintOut } from 'svelte/easing';
 
@@ -42,9 +43,17 @@
 			leftoverText ||
 			(sourceUrl ? hostname(sourceUrl) : sharedId ? 'Shared image' : 'Shared item')
 	);
-	let fallbackSubtext = $derived(leftoverText && leftoverText !== fallbackTitle ? leftoverText : '');
+	let fallbackSubtext = $derived(
+		leftoverText && leftoverText !== fallbackTitle ? leftoverText : ''
+	);
 	let displayTitle = $derived(fetchedTitle || fallbackTitle);
 	let displaySubtext = $derived(fetchedDescription || fallbackSubtext);
+
+	// If you were already adding to a thread when you shared this, the share
+	// lands there too — collecting four links into one place is the whole
+	// point. It's never silent: the chip below the preview says where this is
+	// going and gets you out of it in one tap.
+	onMount(restore);
 
 	onMount(() => {
 		if (sourceUrl) {
@@ -132,8 +141,10 @@
 			source_title: fetchedTitle,
 			source_description: fetchedDescription,
 			source_image: fetchedImage,
+			parent_id: continuation.target?.id ?? null,
 			tagNames
 		});
+		touch();
 
 		// The note is durable in localStorage the moment queueNote() returns,
 		// and the server now keys on client_id so a retry can't duplicate it.
@@ -184,7 +195,9 @@
 			onclick={(e) => e.stopPropagation()}
 			role="presentation"
 		>
-			<div class="mx-auto mb-2 h-1.25 w-9 shrink-0 rounded-full" style="background: var(--color-border);"
+			<div
+				class="mx-auto mb-2 h-1.25 w-9 shrink-0 rounded-full"
+				style="background: var(--color-border);"
 			></div>
 
 			<div class="relative flex shrink-0 items-center justify-center pt-1 pb-3">
@@ -194,8 +207,14 @@
 					class="absolute left-0 flex h-10 w-10 items-center justify-center rounded-[var(--radius-md)]"
 					style="background: var(--color-surface); color: var(--color-ink); box-shadow: 0 1px 2px rgba(0,0,0,0.06);"
 				>
-					<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"
-						><path d="M18 6 6 18M6 6l12 12" /></svg
+					<svg
+						width="16"
+						height="16"
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="2.2"
+						stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg
 					>
 				</button>
 				<div class="text-center">
@@ -210,7 +229,9 @@
 						class="mt-1 mb-4 flex h-32 items-center justify-center rounded-[var(--radius-lg)]"
 						style="background: var(--color-surface); border: 1px solid var(--color-border);"
 					>
-						<div class="h-5 w-5 animate-spin rounded-full border-2" style="border-color: var(--color-border); border-top-color: var(--color-accent);"
+						<div
+							class="h-5 w-5 animate-spin rounded-full border-2"
+							style="border-color: var(--color-border); border-top-color: var(--color-accent);"
 						></div>
 					</div>
 				{:else}
@@ -223,8 +244,15 @@
 								class="mb-3 flex h-10 w-10 items-center justify-center rounded-[var(--radius-sm)]"
 								style="background: var(--color-accent-soft); color: var(--color-accent);"
 							>
-								<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"
-									><path d="M7 17 17 7M8 7h9v9" /></svg
+								<svg
+									width="17"
+									height="17"
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="currentColor"
+									stroke-width="2.2"
+									stroke-linecap="round"
+									stroke-linejoin="round"><path d="M7 17 17 7M8 7h9v9" /></svg
 								>
 							</div>
 							<p class="mb-3 text-xs" style="color: var(--color-ink-faint);">
@@ -270,7 +298,9 @@
 									{displayTitle}
 								</p>
 								{#if displaySubtext}
-									<p class="mt-1 line-clamp-2 text-sm" style="color: var(--color-ink-muted);">{displaySubtext}</p>
+									<p class="mt-1 line-clamp-2 text-sm" style="color: var(--color-ink-muted);">
+										{displaySubtext}
+									</p>
 								{:else if previewLoading}
 									<div
 										class="mt-1.5 h-2.5 w-2/3 animate-pulse rounded-full"
@@ -292,7 +322,35 @@
 			</div>
 
 			<div class="shrink-0 pb-4">
-				<p class="mb-2 text-xs font-medium tracking-wide uppercase" style="color: var(--color-ink-faint);">
+				{#if continuation.target}
+					<div
+						class="mb-3 flex items-center gap-2 rounded-[var(--radius-lg)] py-2 pr-2 pl-3"
+						style="background: var(--color-accent-soft);"
+					>
+						<span class="shrink-0 text-sm leading-none" style="color: var(--color-accent);"
+							>&#8627;</span
+						>
+						<span
+							class="min-w-0 flex-1 truncate text-[0.8rem] font-bold"
+							style="color: var(--color-accent);"
+						>
+							{continuation.target.label}
+						</span>
+						<button
+							type="button"
+							aria-label="Save on its own instead"
+							class="grid h-6 w-6 shrink-0 place-items-center rounded-full text-[0.68rem]"
+							style="background: color-mix(in srgb, var(--color-accent) 16%, transparent); color: var(--color-accent);"
+							onclick={detach}
+						>
+							&#10005;
+						</button>
+					</div>
+				{/if}
+				<p
+					class="mb-2 text-xs font-medium tracking-wide uppercase"
+					style="color: var(--color-ink-faint);"
+				>
 					Save with a tag
 				</p>
 				<div class="grid grid-cols-3 gap-2.5">
@@ -307,8 +365,15 @@
 								: `background: var(--color-surface); border: 1px solid var(--color-border); color: var(--color-ink); ${submitted ? 'opacity: 0.4;' : ''}`}
 						>
 							{#if done}
-								<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"
-									><path d="M20 6 9 17l-5-5" /></svg
+								<svg
+									width="22"
+									height="22"
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="currentColor"
+									stroke-width="2.6"
+									stroke-linecap="round"
+									stroke-linejoin="round"><path d="M20 6 9 17l-5-5" /></svg
 								>
 							{:else}
 								<span class="text-lg font-bold" style="color: var(--color-accent);">#</span>
@@ -320,10 +385,19 @@
 						onclick={openInEditor}
 						disabled={submitted}
 						class="flex aspect-square flex-col items-start justify-between rounded-[var(--radius-lg)] p-3 text-left text-sm font-semibold"
-						style="background: var(--color-ink); color: var(--color-bg); {submitted ? 'opacity: 0.4;' : ''}"
+						style="background: var(--color-ink); color: var(--color-bg); {submitted
+							? 'opacity: 0.4;'
+							: ''}"
 					>
-						<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"
-							><path d="M7 17 17 7M8 7h9v9" /></svg
+						<svg
+							width="18"
+							height="18"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="2.2"
+							stroke-linecap="round"
+							stroke-linejoin="round"><path d="M7 17 17 7M8 7h9v9" /></svg
 						>
 						Open
 					</button>
@@ -338,8 +412,15 @@
 						: `background: var(--color-accent); color: var(--color-accent-ink); ${submitted ? 'opacity: 0.4;' : ''}`}
 				>
 					{#if submittedKey === 'inbox'}
-						<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"
-							><path d="M20 6 9 17l-5-5" /></svg
+						<svg
+							width="18"
+							height="18"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="2.6"
+							stroke-linecap="round"
+							stroke-linejoin="round"><path d="M20 6 9 17l-5-5" /></svg
 						>
 						Saved
 					{:else}
