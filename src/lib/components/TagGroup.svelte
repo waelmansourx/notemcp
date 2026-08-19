@@ -2,15 +2,21 @@
 	import type { Tag, ThreadStub } from '$lib/types';
 	import { relativeTime } from '$lib/dates';
 	import { writeInto } from '$lib/composer.svelte';
+	import { tagDisplay } from '$lib/tags';
 
 	let {
 		tag,
 		count,
-		notes
+		notes,
+		label = tagDisplay(tag.name)
 	}: {
 		tag: Tag;
 		count: number;
 		notes: ThreadStub[];
+		/** Overrides the header text — used inside a namespace section, where
+		 *  the namespace is already said once and each card only needs its own
+		 *  leaf ("composer", not "features › composer" again). */
+		label?: string;
 	} = $props();
 
 	/** Three to a page. The next page peeks past the right edge, which is the
@@ -38,7 +44,7 @@
 		href={`/?tag=${encodeURIComponent(tag.name)}`}
 		class="flex items-center gap-2 active:opacity-60"
 	>
-		<span class="tag tag-lg min-w-0 truncate">#{tag.name}</span>
+		<span class="tag tag-lg min-w-0 truncate">#{label}</span>
 		<span
 			class="shrink-0 text-[0.82rem] font-bold tabular-nums"
 			style="color: var(--color-ink-faint);">{count}</span

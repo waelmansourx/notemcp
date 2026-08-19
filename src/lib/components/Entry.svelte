@@ -45,6 +45,7 @@
 		onclick={keepSelection}
 		class="block active:opacity-65"
 		aria-label={heading || firstLine(note.content_markdown) || 'Note'}
+		style={queued ? '' : `view-transition-name: note-${note.id};`}
 	>
 		{#if isLink}
 			<div class="flex items-start gap-4">

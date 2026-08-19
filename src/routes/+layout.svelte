@@ -3,12 +3,30 @@
 	import './layout.css';
 	import favicon from '$lib/assets/favicon.svg';
 	import { onMount } from 'svelte';
-	import { invalidate } from '$app/navigation';
+	import { invalidate, onNavigate } from '$app/navigation';
 	import { browser } from '$app/environment';
 	import { flushOutbox } from '$lib/outbox';
 	import Toast from '$lib/components/Toast.svelte';
 
 	let { children, data } = $props();
+
+	// Opening a note from the stream reads as a link — a jump to a different
+	// page — unless something bridges the two frames. A View Transition does
+	// that for free: elements sharing a `view-transition-name` (an entry's
+	// body, the editor's title+body card — see Entry.svelte / NoteEditor.svelte)
+	// cross-fade and morph into each other instead of the page just swapping,
+	// so tapping a note reads as that note expanding in place, not as leaving
+	// it for somewhere else. Everything without a shared name still gets a
+	// plain cross-fade, and browsers without the API just navigate as before.
+	onNavigate((navigation) => {
+		if (!document.startViewTransition) return;
+		return new Promise((resolve) => {
+			document.startViewTransition(async () => {
+				resolve();
+				await navigation.complete;
+			});
+		});
+	});
 
 	if (browser) {
 		import('virtual:pwa-register/svelte').then(({ useRegisterSW }) => {

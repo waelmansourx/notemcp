@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { Tag } from '$lib/types';
-	import { normalizeTagName } from '$lib/tags';
+	import { normalizeTagName, tagDisplay } from '$lib/tags';
 
 	let {
 		selected = $bindable(),
@@ -72,6 +72,41 @@
 	function cancelNewTag() {
 		newTagInput = '';
 		addingTag = false;
+		onpick?.();
+	}
+
+	/* ---------------- typeahead ----------------
+
+	   A tag you already made is a name you have to get exactly right to
+	   reuse — miss a character and "features/composer" quietly becomes a new
+	   tag "features/compsoer" living next to it. So while the field has text
+	   in it, it doubles as a search over every tag you actually have (recent,
+	   ranked; unused, everything else — see +layout.server.ts) rather than
+	   only ever proposing to create what's typed. Picking one here skips
+	   `commitNewTag` entirely: there's no "new" tag to make. */
+	let typeaheadMatches = $derived.by(() => {
+		const query = normalizeTagName(newTagInput);
+		if (!query) return [];
+		const pool: string[] = [];
+		const seen = new Set<string>();
+		for (const name of [...freshTags, ...recent.map((t) => t.name)]) {
+			if (name && !seen.has(name)) {
+				seen.add(name);
+				pool.push(name);
+			}
+		}
+		return pool.filter((name) => name !== query && name.includes(query)).slice(0, 6);
+	});
+
+	// While you're typing a name, the row shows what already exists that
+	// matches it instead of the usual one-tap suggestions — there's nothing
+	// to tap-toggle mid-type, only something to find.
+	let visibleSuggestions = $derived(newTagInput.trim() ? typeaheadMatches : suggestions);
+
+	function pickExisting(name: string) {
+		newTagInput = '';
+		addingTag = false;
+		if (!selected.includes(name)) selected = [...selected, name];
 		onpick?.();
 	}
 </script>
@@ -158,19 +193,29 @@
 			class="flex items-center gap-1.5 overflow-x-auto pr-6"
 			style="scrollbar-width: none;"
 		>
-			{#each suggestions as name (name)}
+			{#each visibleSuggestions as name (name)}
 				{@const on = selected.includes(name)}
+				{@const typing = Boolean(newTagInput.trim())}
 				<button
 					type="button"
 					class="min-h-8 shrink-0 rounded-full border px-3 py-1.5 text-[0.8rem] font-medium whitespace-nowrap active:scale-95"
-					class:border-dashed={!on}
+					class:border-dashed={!on && !typing}
 					style={on
 						? 'border-color: transparent; background: var(--color-accent-soft); color: var(--color-accent); font-weight: 620;'
-						: 'border-color: var(--color-border); color: var(--color-ink-muted); background: none;'}
+						: typing
+							? 'border-color: var(--color-accent); color: var(--color-accent); background: none;'
+							: 'border-color: var(--color-border); color: var(--color-ink-muted); background: none;'}
 					aria-pressed={on}
-					onclick={(e) => toggleTag(name, e)}
+					onmousedown={(e) => {
+						// Clicking this while the tag field is focused would blur it
+						// first — committing whatever's mid-typed as its own tag before
+						// this button's click even fires. Stopping the blur here keeps
+						// that from racing ahead of the pick.
+						if (typing) e.preventDefault();
+					}}
+					onclick={(e) => (typing ? pickExisting(name) : toggleTag(name, e))}
 				>
-					#{name}{#if on}<span class="ml-1 opacity-50">✕</span>{/if}
+					#{tagDisplay(name)}{#if on}<span class="ml-1 opacity-50">✕</span>{/if}
 				</button>
 			{/each}
 		</div>

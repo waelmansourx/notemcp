@@ -1,7 +1,13 @@
 /// <reference types="bun" />
 import { describe, expect, test } from 'bun:test';
 import { EditorSelection, EditorState } from '@codemirror/state';
-import { continueList, formatCommands, taskToggleEdit, type FormatAction } from './markdown-live';
+import {
+	continueList,
+	formatCommands,
+	parseImageSpan,
+	taskToggleEdit,
+	type FormatAction
+} from './markdown-live';
 
 // `|` marks the caret. Returns the document with the caret marked again, or
 // null when the command declines to handle the key (letting CodeMirror's own
@@ -164,5 +170,28 @@ describe('taskToggleEdit', () => {
 	test('ignores lines that are not tasks', () => {
 		expect(taskToggleEdit('- milk')).toBeNull();
 		expect(taskToggleEdit('plain text')).toBeNull();
+	});
+});
+
+describe('parseImageSpan', () => {
+	test("splits an image node's text into alt and url", () => {
+		expect(parseImageSpan('![](/api/media/abc)')).toEqual({ alt: '', url: '/api/media/abc' });
+		expect(parseImageSpan('![a photo](/api/media/abc)')).toEqual({
+			alt: 'a photo',
+			url: '/api/media/abc'
+		});
+	});
+
+	test('tolerates a title and discards it', () => {
+		expect(parseImageSpan('![](/api/media/abc "a title")')).toEqual({
+			alt: '',
+			url: '/api/media/abc'
+		});
+	});
+
+	test('declines anything that is not exactly an image span', () => {
+		expect(parseImageSpan('[link](/x)')).toBeNull();
+		expect(parseImageSpan('![broken(/x)')).toBeNull();
+		expect(parseImageSpan('not an image at all')).toBeNull();
 	});
 });

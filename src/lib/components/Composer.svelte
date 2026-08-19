@@ -88,6 +88,18 @@
 		target ? (target.label.length > 24 ? target.label.slice(0, 23) + '…' : target.label) : ''
 	);
 
+	/** What a fresh thought starts tagged with. Continuing a thread means
+	 *  joining its identity, not just its timeline — the tags you'd have to
+	 *  retype by hand to keep three thoughts about the same thing findable
+	 *  together are exactly the tags that thread is already carrying, so a
+	 *  continuation inherits them outright rather than starting blank. A
+	 *  thought written on its own falls back to whatever tag the screen you
+	 *  opened the composer from was already filtered to. */
+	function defaultTags(): string[] {
+		if (target) return target.tags.map((t) => t.name);
+		return contextTag ? [contextTag] : [];
+	}
+
 	onMount(restore);
 
 	/* ---------------- the draft survives everything ----------------
@@ -139,7 +151,7 @@
 		// Only a genuinely empty composer resets — reopening one that still
 		// holds an unsaved thought has to give it back exactly as it was.
 		if (!hasContent) {
-			selected = contextTag ? [contextTag] : [];
+			selected = defaultTags();
 			clearPhoto();
 		}
 		voiceError = '';
@@ -349,7 +361,7 @@
 			return;
 		}
 
-		selected = contextTag ? [contextTag] : [];
+		selected = defaultTags();
 		interim = '';
 		seconds = 0;
 		recording = true;
@@ -621,7 +633,7 @@
 	{#if target}
 		<div
 			class="mb-2.5 flex shrink-0 items-center gap-2 rounded-[14px] py-1.5 pr-1.5 pl-2.5"
-			style="background: var(--color-accent-soft);"
+			
 		>
 			<span class="shrink-0 text-[0.85rem] leading-none" style="color: var(--color-accent);"
 				>&#8627;</span

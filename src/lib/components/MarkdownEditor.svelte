@@ -61,10 +61,20 @@
 		view.focus();
 	}
 
-	// Lets the title field hand the caret over on Enter.
-	export function focusEditor() {
-		if (!view) return;
+	// Focus editor and place caret at clicked coordinates or end of document.
+	export function focusEditor(coords?: { x: number; y: number } | null) {
+		if (!view) {
+			pendingFocus = true;
+			return;
+		}
 		view.focus();
+		if (coords && typeof coords.x === 'number' && typeof coords.y === 'number') {
+			const pos = view.posAtCoords(coords);
+			if (pos !== null) {
+				view.dispatch({ selection: { anchor: pos, head: pos } });
+				return;
+			}
+		}
 		view.dispatch({ selection: { anchor: view.state.doc.length } });
 	}
 
@@ -102,7 +112,13 @@
 	});
 </script>
 
-<div class="editor-shell">
+<div
+	class="editor-shell"
+	onclick={(e) => {
+		if (!view) return;
+		focusEditor({ x: e.clientX, y: e.clientY });
+	}}
+>
 	<div bind:this={host} class="cm-host" class:hidden={!view}></div>
 
 	{#if !view}
@@ -117,26 +133,50 @@
 
 <style>
 	/* The shell, the host and the editor all stretch so that tapping the
-	   blank space under a short note still puts the caret in the document —
-	   otherwise only the line of text itself is a target. */
+	   blank space under a short note still puts the caret in the document. */
 	.editor-shell {
 		position: relative;
 		display: flex;
 		flex: 1 1 auto;
 		flex-direction: column;
-		min-height: 40vh;
-		/* Breathing room so the last line never sits under the sticky tag bar. */
-		padding-bottom: 1.5rem;
+		width: 100%;
+		cursor: text;
+		min-height: 2.5rem;
 	}
 
 	.cm-host {
 		display: flex;
 		flex: 1 1 auto;
 		flex-direction: column;
+		width: 100%;
+		cursor: text;
 	}
 
 	.cm-host :global(.cm-editor) {
 		flex: 1 1 auto;
+		display: flex;
+		flex-direction: column;
+		width: 100%;
+		cursor: text;
+	}
+
+	.cm-host :global(.cm-scroller) {
+		flex: 1 1 auto;
+		display: flex;
+		flex-direction: column;
+		width: 100%;
+		cursor: text;
+	}
+
+	.cm-host :global(.cm-content) {
+		flex: 1 1 auto;
+		width: 100%;
+		cursor: text;
+	}
+
+	.cm-host :global(.cm-line) {
+		width: 100%;
+		cursor: text;
 	}
 
 	.cm-fallback,

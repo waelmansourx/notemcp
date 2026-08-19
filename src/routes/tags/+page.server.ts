@@ -1,5 +1,6 @@
 import type { PageServerLoad } from './$types';
 import type { Tag, ThreadStub } from '$lib/types';
+import { tagNamespace } from '$lib/tags';
 
 export type TagGroup = {
 	tag: Tag;
@@ -7,6 +8,16 @@ export type TagGroup = {
 	/** The most recent notes carrying this tag — enough to fill the card's
 	 *  pages, not the whole tag. */
 	notes: ThreadStub[];
+};
+
+/** Tags sharing a namespace ("features/composer", "features/export") shown
+ *  under one heading, instead of each repeating "features" in its own card.
+ *  A tag with no `/` gets a section of its own, keyed by its full name, so
+ *  every tag renders through the same list either way. */
+export type TagSection = {
+	namespace: string | null;
+	key: string;
+	groups: TagGroup[];
 };
 
 /** Three rows to a page, three pages: enough that a tag reads as a place with
@@ -22,7 +33,7 @@ const PER_TAG = 9;
  * the database.
  */
 const PREVIEW_SELECT =
-	'id, title, source_title, source_image, source_url, updated_at, preview, thread_count';
+	'id, title, source_title, source_image, source_url, updated_at, thread_count, preview, note_tags(tags(id, name))';
 
 function label(row: any): string {
 	const raw = (row.source_title || row.title || row.preview || '').replace(/\s+/g, ' ').trim();
@@ -39,11 +50,15 @@ function hostname(url: string | null): string | null {
 	}
 }
 
+function tagsOf(row: any): Tag[] {
+	return (row.note_tags ?? []).map((nt: any) => nt.tags).filter(Boolean);
+}
+
 export const load: PageServerLoad = async ({ locals: { supabase, user } }) => {
 	const { data: tagRows } = await supabase.from('tags').select('id, name').eq('user_id', user!.id);
 
 	const tags: Tag[] = tagRows ?? [];
-	if (tags.length === 0) return { groups: [] as TagGroup[] };
+	if (tags.length === 0) return { sections: [] as TagSection[] };
 
 	const { data: links } = await supabase
 		.from('note_tags')
@@ -54,7 +69,7 @@ export const load: PageServerLoad = async ({ locals: { supabase, user } }) => {
 		);
 
 	const noteIds = [...new Set((links ?? []).map((l: any) => l.note_id))];
-	if (noteIds.length === 0) return { groups: [] as TagGroup[] };
+	if (noteIds.length === 0) return { sections: [] as TagSection[] };
 
 	const { data: noteRows } = await supabase
 		.from('notes')
@@ -74,7 +89,8 @@ export const load: PageServerLoad = async ({ locals: { supabase, user } }) => {
 			image: row.source_image ?? null,
 			source: hostname(row.source_url ?? null),
 			count: row.thread_count ?? 0,
-			at: row.updated_at
+			at: row.updated_at,
+			tags: tagsOf(row)
 		});
 		rank.set(row.id, i);
 	});
@@ -103,5 +119,22 @@ export const load: PageServerLoad = async ({ locals: { supabase, user } }) => {
 		// the thing you're most likely to be looking for.
 		.sort((a, b) => (b.notes[0]?.at ?? '').localeCompare(a.notes[0]?.at ?? ''));
 
-	return { groups };
+	// Fold same-namespace tags under one heading, in the order their most
+	// recently touched member first appears — a namespace is as "hot" as
+	// whichever of its tags you reached for last.
+	const byNamespace = new Map<string, TagSection>();
+	const sections: TagSection[] = [];
+	for (const group of groups) {
+		const namespace = tagNamespace(group.tag.name);
+		const key = namespace ?? group.tag.name;
+		let section = byNamespace.get(key);
+		if (!section) {
+			section = { namespace, key, groups: [] };
+			byNamespace.set(key, section);
+			sections.push(section);
+		}
+		section.groups.push(group);
+	}
+
+	return { sections };
 };

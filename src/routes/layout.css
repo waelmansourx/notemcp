@@ -146,6 +146,24 @@ button:not(:disabled):focus-visible,
 [role='button']:focus-visible,
 input:focus-visible,
 textarea:focus-visible {
-	outline: 2px solid var(--color-accent);
+	outline: none;
 	outline-offset: 2px;
+}
+
+/* ---------------------------------------------------------------
+   View transitions.
+
+   An entry in the stream and the editor's title+body card share a
+   `view-transition-name` (see Entry.svelte / NoteEditor.svelte), so
+   opening a note morphs the tapped entry into the editor instead of the
+   page just swapping — the stream isn't "linked away from," it grows.
+   Reduced-motion visitors get the same navigation with no animation:
+   the morph is a nicety, never the thing carrying the information.
+   --------------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+	::view-transition-group(*),
+	::view-transition-old(*),
+	::view-transition-new(*) {
+		animation: none !important;
+	}
 }

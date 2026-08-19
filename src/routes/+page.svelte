@@ -13,6 +13,9 @@
 
 	let { data }: { data: PageData } = $props();
 
+	// Date range filter state: [startMs, endMs)
+	let dateRange = $state<[number, number] | null>(null);
+
 	// The last stream that loaded, kept on this device. Only consulted when the
 	// server couldn't answer — an empty list then means "the request failed",
 	// not "you've written nothing", and showing nothing would be a lie.
@@ -69,14 +72,26 @@
 	);
 
 	let activeTags = $derived(page.url.searchParams.getAll('tag'));
-	let visible = $derived(applyFilter(notes, activeTags, filter.q));
+	let filtered = $derived(applyFilter(notes, activeTags, filter.q));
+	let visible = $derived.by(() => {
+		if (!dateRange) return filtered;
+		const [startMs, endMs] = dateRange;
+		return filtered.filter((note) => {
+			const noteTime = new Date(streamDate(note)).getTime();
+			return noteTime >= startMs && noteTime < endMs;
+		});
+	});
 	let groups = $derived(groupByDay(visible));
 
 	// The bar stays up whenever a filter is actually doing something, so
 	// arriving on /?tag=blog explains itself instead of just showing you a
 	// short stream with no reason given.
-	let showFilter = $derived(filter.open || activeTags.length > 0 || filter.q.trim().length > 0);
-	let filtering = $derived(activeTags.length > 0 || filter.q.trim().length > 0);
+	let showFilter = $derived(
+		filter.open || activeTags.length > 0 || filter.q.trim().length > 0 || dateRange !== null
+	);
+	let filtering = $derived(
+		activeTags.length > 0 || filter.q.trim().length > 0 || dateRange !== null
+	);
 </script>
 
 <svelte:head><title>NoteMCP</title></svelte:head>
@@ -84,10 +99,16 @@
 <!-- pb-36 clears the composer docked at the bottom of the column — the
      phone's collapsed write bar below `lg`, the always-open dock above it. -->
 <div class="safe-top mx-auto min-h-screen max-w-2xl pb-36">
-	<StreamNav {subtitle} />
+	<StreamNav {subtitle} minimal={showFilter} />
 
 	{#if showFilter}
-		<StreamFilter tags={data.allTags} total={notes.length} showing={visible.length} />
+		<StreamFilter
+			tags={data.allTags}
+			total={notes.length}
+			showing={visible.length}
+			{dateRange}
+			onDateRangeChange={(range) => (dateRange = range)}
+		/>
 	{/if}
 
 	<div class="px-[22px]">

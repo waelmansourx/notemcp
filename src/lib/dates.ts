@@ -4,6 +4,27 @@ function startOfDay(d: Date): number {
 	return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
 }
 
+/** "Today" / "Yesterday" / "Monday" / "11 Aug" / "11 Aug 2025" — the same day
+ *  label the stream groups notes under, factored out so anything else that
+ *  buckets by day (the tags list, in particular) reads identically. */
+export function dayLabel(dateMs: number): string {
+	const today = startOfDay(new Date());
+	const yesterday = today - 86_400_000;
+	const weekAgo = today - 6 * 86_400_000;
+	const thisYear = new Date().getFullYear();
+	const day = startOfDay(new Date(dateMs));
+	const date = new Date(day);
+
+	if (day === today) return 'Today';
+	if (day === yesterday) return 'Yesterday';
+	if (day > weekAgo) return date.toLocaleDateString(undefined, { weekday: 'long' });
+	return date.toLocaleDateString(undefined, {
+		day: 'numeric',
+		month: 'short',
+		year: date.getFullYear() === thisYear ? undefined : 'numeric'
+	});
+}
+
 export interface DayGroup {
 	/** Stable key for {#each} — the day's epoch ms. */
 	key: number;
@@ -19,11 +40,6 @@ export function streamDate(note: Note): string {
 }
 
 export function groupByDay(notes: Note[]): DayGroup[] {
-	const today = startOfDay(new Date());
-	const yesterday = today - 86_400_000;
-	const weekAgo = today - 6 * 86_400_000;
-	const thisYear = new Date().getFullYear();
-
 	const buckets = new Map<number, Note[]>();
 	for (const note of notes) {
 		const day = startOfDay(new Date(streamDate(note)));
@@ -34,21 +50,7 @@ export function groupByDay(notes: Note[]): DayGroup[] {
 
 	return [...buckets.entries()]
 		.sort((a, b) => b[0] - a[0])
-		.map(([day, dayNotes]) => {
-			const date = new Date(day);
-			let label: string;
-			if (day === today) label = 'Today';
-			else if (day === yesterday) label = 'Yesterday';
-			else if (day > weekAgo) label = date.toLocaleDateString(undefined, { weekday: 'long' });
-			else
-				label = date.toLocaleDateString(undefined, {
-					day: 'numeric',
-					month: 'short',
-					year: date.getFullYear() === thisYear ? undefined : 'numeric'
-				});
-
-			return { key: day, label, notes: dayNotes };
-		});
+		.map(([day, dayNotes]) => ({ key: day, label: dayLabel(day), notes: dayNotes }));
 }
 
 /** "7:42 PM" — the inline form used on today's entries. */

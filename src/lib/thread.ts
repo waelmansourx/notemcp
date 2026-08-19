@@ -96,6 +96,7 @@ export function stubOf(note: Note): ThreadStub {
 		image: note.source_image ?? null,
 		source,
 		count: threadCount(note),
-		at: lastActivity(note)
+		at: lastActivity(note),
+		tags: note.tags
 	};
 }

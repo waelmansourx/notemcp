@@ -78,7 +78,7 @@
 		for (const name of [...recentTags.map((t) => t.name), ...QUICK_TAGS]) {
 			if (name && !names.includes(name)) names.push(name);
 		}
-		return names.slice(0, 6);
+		return names.slice(0, 5);
 	});
 
 	let caption = $state('');
@@ -90,6 +90,11 @@
 	let dismissed = $state(false);
 
 	onMount(() => {
+		captionEl?.focus();
+		requestAnimationFrame(() => {
+			captionEl?.focus();
+		});
+
 		if (sourceUrl) {
 			previewLoading = true;
 			fetch(`/api/link-preview?url=${encodeURIComponent(sourceUrl)}`)
@@ -334,6 +339,7 @@
 				{/if}
 
 				<textarea
+					autofocus
 					bind:this={captionEl}
 					bind:value={caption}
 					placeholder="Add a thought…"
@@ -346,7 +352,7 @@
 			{#if continuation.target}
 				<div
 					class="mb-2.5 flex shrink-0 items-center gap-2 rounded-[14px] py-1.5 pr-1.5 pl-2.5"
-					style="background: var(--color-accent-soft);"
+					
 				>
 					<span class="shrink-0 text-[0.85rem] leading-none" style="color: var(--color-accent);"
 						>&#8627;</span
@@ -378,43 +384,69 @@
 			{/if}
 
 			<!--
-				Six tags, and tapping one saves. Selecting a tag and then
-				confirming is the right shape inside the app, where you're
-				already writing; here you're standing in another app with the
-				thing half-shared, and the whole value is that filing it costs
-				one tap. So the tag *is* the button.
+				Five tags + Open button in a 3×2 card grid.
 			-->
-			<div class="mb-2.5 grid shrink-0 grid-cols-3 gap-2">
+			<div class="mb-2.5 grid shrink-0 grid-cols-3 gap-2.5">
 				{#each quickTags as tag (tag)}
 					<button
 						type="button"
 						disabled={submitted}
-						class="flex h-[2.75rem] items-center justify-center rounded-[14px] text-[0.9rem] font-bold tracking-[-0.015em] active:scale-[0.97] disabled:opacity-40"
+						class="flex h-[4rem] min-w-0 flex-col justify-between rounded-[16px] p-2.5 text-left transition-transform active:scale-[0.97] disabled:opacity-40"
 						style={savedTag === tag
 							? 'background: var(--color-success-soft); color: var(--color-success);'
-							: 'background: var(--color-surface-2); color: var(--color-ink);'}
+							: 'background: var(--color-surface-2); color: var(--color-ink); border: 1px solid var(--color-border);'}
 						onclick={() => save([tag], tag)}
 					>
 						{#if savedTag === tag}
-							<svg
-								width="18"
-								height="18"
-								viewBox="0 0 24 24"
-								fill="none"
-								stroke="currentColor"
-								stroke-width="2.6"
-								stroke-linecap="round"
-								stroke-linejoin="round"><path d="M20 6 9 17l-5-5" /></svg
-							>
+							<div class="flex h-full w-full items-center justify-center">
+								<svg
+									width="20"
+									height="20"
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="currentColor"
+									stroke-width="2.6"
+									stroke-linecap="round"
+									stroke-linejoin="round"><path d="M20 6 9 17l-5-5" /></svg
+								>
+							</div>
 						{:else}
-							<span style="color: var(--color-accent);">#</span>{tag}
+							<span class="text-[1.05rem] font-bold leading-none" style="color: var(--color-accent);">#</span>
+							<span class="w-full truncate text-[0.85rem] font-bold tracking-[-0.01em]">
+								{tag}
+							</span>
 						{/if}
 					</button>
 				{/each}
+
+				<button
+					type="button"
+					aria-label="Open in the editor"
+					disabled={submitted}
+					class="flex h-[4rem] min-w-0 flex-col justify-between rounded-[16px] p-2.5 text-left transition-transform active:scale-[0.97] disabled:opacity-40"
+					style="background: var(--color-ink); color: var(--color-surface);"
+					onclick={openInEditor}
+				>
+					<svg
+						width="16"
+						height="16"
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="2.4"
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						class="opacity-80"
+					>
+						<path d="M7 17 17 7M8 7h9v9" />
+					</svg>
+					<span class="w-full truncate text-[0.85rem] font-bold tracking-[-0.01em]">
+						Open
+					</span>
+				</button>
 			</div>
 
-			<!-- Dismissing sits at the far left, a whole button away from Save:
-			     they're both one tap, and only one of them is recoverable. -->
+			<!-- Dismissing sits at the left; Save takes the remaining width -->
 			<div class="flex shrink-0 items-center gap-2">
 				<button
 					type="button"
@@ -432,26 +464,6 @@
 						stroke="currentColor"
 						stroke-width="2.2"
 						stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg
-					>
-				</button>
-
-				<button
-					type="button"
-					aria-label="Open in the editor"
-					disabled={submitted}
-					class="grid h-[2.875rem] w-[2.875rem] shrink-0 place-items-center rounded-full disabled:opacity-40"
-					style="background: var(--color-surface-2); color: var(--color-ink-2);"
-					onclick={openInEditor}
-				>
-					<svg
-						width="17"
-						height="17"
-						viewBox="0 0 24 24"
-						fill="none"
-						stroke="currentColor"
-						stroke-width="2.2"
-						stroke-linecap="round"
-						stroke-linejoin="round"><path d="M7 17 17 7M8 7h9v9" /></svg
 					>
 				</button>
 
@@ -477,7 +489,7 @@
 						>
 						Saved
 					{:else}
-						Just save<span class="text-[0.82rem] font-medium opacity-75">to Inbox</span>
+						Just save
 					{/if}
 				</button>
 			</div>

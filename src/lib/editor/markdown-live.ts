@@ -101,6 +101,40 @@ class TaskCheckboxWidget extends WidgetType {
 	}
 }
 
+/** Exported for tests: an `Image` node's own text (`![alt](url)`, as sliced
+ *  straight from the syntax tree) split into its alt text and url, or null
+ *  if the span isn't exactly that shape — a title in quotes is tolerated and
+ *  discarded, everything else declines rather than guessing. */
+export function parseImageSpan(text: string): { alt: string; url: string } | null {
+	const match = text.match(/^!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)$/);
+	if (!match) return null;
+	return { alt: match[1], url: match[2] };
+}
+
+class ImageWidget extends WidgetType {
+	constructor(
+		readonly url: string,
+		readonly alt: string
+	) {
+		super();
+	}
+
+	eq(other: ImageWidget) {
+		return other.url === this.url && other.alt === this.alt;
+	}
+
+	toDOM() {
+		const wrap = document.createElement('span');
+		wrap.className = 'cm-md-image';
+		const img = document.createElement('img');
+		img.src = this.url;
+		img.alt = this.alt;
+		img.loading = 'lazy';
+		wrap.appendChild(img);
+		return wrap;
+	}
+}
+
 function decorate(view: EditorView): DecorationSet {
 	const ranges: Range<Decoration>[] = [];
 	const { doc } = view.state;
@@ -159,6 +193,32 @@ function decorate(view: EditorView): DecorationSet {
 					case 'URL':
 						ranges.push(URL_DECO.range(node.from, node.to));
 						break;
+					case 'Image': {
+						// The caret has to be able to get inside `![alt](url)` to edit
+						// it, so a span the cursor is currently in (or that IME is mid
+						// composition over) is left as plain, editable markdown text —
+						// only an image nobody is touching collapses to its thumbnail.
+						if (disturbsComposition(node.from, node.to)) break;
+						const head = view.state.selection.main.head;
+						// Losing focus entirely (tapping the title, another
+						// thought, the tag bar) has to collapse it too — the
+						// selection itself doesn't move just because focus left,
+						// so without this an image typed at the very end of the
+						// document would stay raw text forever once you tab away.
+						if (view.hasFocus && head >= node.from && head <= node.to) break;
+						const parsed = parseImageSpan(doc.sliceString(node.from, node.to));
+						if (!parsed) break;
+						ranges.push(
+							Decoration.replace({ widget: new ImageWidget(parsed.url, parsed.alt) }).range(
+								node.from,
+								node.to
+							)
+						);
+						// The widget already stands for everything inside this span —
+						// walking into its LinkMark/URL children would emit ordinary
+						// mark decorations over text that's being replaced.
+						return false;
+					}
 					case 'ListMark': {
 						// A task's bullet is redundant next to its checkbox, so hide
 						// it; a plain bullet is kept and tinted instead.
@@ -231,6 +291,11 @@ const livePreviewPlugin = ViewPlugin.fromClass(
 				update.docChanged ||
 				update.viewportChanged ||
 				update.selectionSet ||
+				// A blur with no other change still has to re-run decorate(): an
+				// image the caret was sitting inside collapses to its thumbnail
+				// only once the editor has actually lost focus (see the Image
+				// case above), and nothing else here would trigger that redraw.
+				update.focusChanged ||
 				composing !== this.composing
 			) {
 				this.decorations = decorate(update.view);
@@ -438,22 +503,33 @@ const theme = EditorView.theme({
 	'&': {
 		color: 'var(--color-ink)',
 		backgroundColor: 'transparent',
-		fontSize: '1rem'
+		fontSize: '1rem',
+		width: '100%',
+		cursor: 'text'
 	},
 	'&.cm-focused': { outline: 'none' },
+	'.cm-scroller': {
+		fontFamily: 'var(--font-serif)',
+		lineHeight: '1.65',
+		cursor: 'text',
+		width: '100%'
+	},
 	'.cm-content': {
 		padding: '0',
 		fontFamily: 'var(--font-serif)',
 		lineHeight: '1.65',
 		caretColor: 'var(--color-accent)',
-		// Fill the shell so a tap anywhere in the blank area below a short
-		// note still lands in the document.
+		cursor: 'text',
+		width: '100%',
 		minHeight: '100%'
 	},
-	'.cm-line': { padding: '0' },
-	'.cm-scroller': { fontFamily: 'var(--font-serif)', lineHeight: '1.65' },
+	'.cm-line': {
+		padding: '0',
+		cursor: 'text',
+		width: '100%'
+	},
 	'.cm-cursor, .cm-dropCursor': { borderLeftColor: 'var(--color-accent)' },
-	'.cm-placeholder': { color: 'var(--color-ink-faint)' },
+	'.cm-placeholder': { color: 'var(--color-ink-faint)', cursor: 'text' },
 	'&.cm-focused .cm-selectionBackground, .cm-selectionBackground, ::selection': {
 		backgroundColor: 'var(--color-accent-soft)'
 	},
@@ -497,6 +573,18 @@ const theme = EditorView.theme({
 		borderLeft: '3px solid var(--color-border)',
 		paddingLeft: '0.85em',
 		color: 'var(--color-ink-muted)'
+	},
+
+	'.cm-md-image': {
+		display: 'block',
+		margin: '0.3em 0'
+	},
+	'.cm-md-image img': {
+		display: 'block',
+		maxWidth: '100%',
+		maxHeight: '22rem',
+		borderRadius: 'var(--radius-lg, 0.9rem)',
+		objectFit: 'cover'
 	},
 
 	'.cm-md-task-checkbox': {

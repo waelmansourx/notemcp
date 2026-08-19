@@ -2,14 +2,16 @@
 	let { label }: { label: string } = $props();
 </script>
 
-<!-- A left-aligned marker with real space above it, rather than a centred grey
-     pill. The pill was a chat-app gesture — it floated in the middle of the
-     column and made every day break look like an interruption. This reads as
-     the head of a section: quiet, but structural, and it lines up with the
-     thoughts it introduces. -->
-<h2
-	class="pt-[30px] pb-1.5 text-[0.72rem] font-extrabold tracking-[0.14em] uppercase"
-	style="color: var(--color-ink-faint);"
->
-	{label}
-</h2>
+<!-- position: sticky with no scroll container of its own is the standard
+     pure-CSS trick for date dividers: every heading pins to the same top
+     offset, so as the page scrolls the current one stays put until the next
+     heading's box reaches the top and physically pushes it out — no scroll
+     listeners, no JS state, so there's nothing to end up invisible. -->
+<div class="sticky top-0 z-10 flex justify-center pt-[18px] pb-2">
+	<h2
+		class="rounded-full px-4 py-1.5 text-[0.78rem] font-semibold shadow-sm"
+		style="background: var(--color-surface-2); color: var(--color-ink-muted);"
+	>
+		{label}
+	</h2>
+</div>

@@ -5,9 +5,11 @@
 	import EditorToolbar from '$lib/components/EditorToolbar.svelte';
 	import { hostname, timeOfDay } from '$lib/dates';
 	import { clearDraft, isNewerThan, pruneDrafts, readDraft, saveDraft } from '$lib/draft.svelte';
-	import { stubOf } from '$lib/thread';
-	import { addPending, settlePending } from '$lib/stream.svelte';
-	import { writeInto } from '$lib/composer.svelte';
+	import { addPending, asNote, isPending, settlePending } from '$lib/stream.svelte';
+	import { queueNote, syncEntry } from '$lib/outbox';
+	import { beginMediaUpload, type PendingMedia } from '$lib/media';
+	import { normalizeTagName } from '$lib/tags';
+	import { showToast } from '$lib/toast.svelte';
 	import Thought from './Thought.svelte';
 	import type { Note } from '$lib/types';
 
@@ -36,10 +38,22 @@
 	 * filed underneath it as replies. Every thought in a thread is a peer; the
 	 * only thing special about this one is that it's the one you're editing.
 	 */
-	let position = $derived(existingNote ? thread.findIndex((t) => t.id === existingNote.id) : -1);
-	let before = $derived(position > 0 ? thread.slice(0, position) : []);
-	let after = $derived(position >= 0 ? thread.slice(position + 1) : []);
-	let inThread = $derived(thread.length > 1);
+	let id = $state(existingNote?.id ?? null);
+
+	// A local, mutable copy: this component stays mounted while you move
+	// between peer thoughts (see switchTo below) or add a new one to the end,
+	// and `thread` only ever arrives fresh via a real remount (the route's
+	// `{#key}` on the note id), so seeding once here is exactly right.
+	let threadItems = $state<Note[]>(thread);
+
+	let position = $derived(id ? threadItems.findIndex((t) => t.id === id) : -1);
+	let before = $derived(position > 0 ? threadItems.slice(0, position) : []);
+	let after = $derived(position >= 0 ? threadItems.slice(position + 1) : []);
+	let inThread = $derived(threadItems.length > 1);
+	/** The thought actually open in the editor below — differs from
+	 *  `existingNote`, the one this page first loaded with, once a peer in
+	 *  the thread has been tapped (see switchTo). */
+	let activeNote = $derived(threadItems.find((t) => t.id === id) ?? existingNote);
 
 	// Opening the fourth thought shouldn't dump you at the first one. The
 	// editor is scrolled to the top of the viewport once, on mount, so you
@@ -50,7 +64,6 @@
 		editorBlock.scrollIntoView({ block: 'start' });
 	});
 
-	let id = $state(existingNote?.id ?? null);
 	let title = $state(existingNote?.title ?? prefill?.title ?? '');
 	let content = $state(existingNote?.content_markdown ?? prefill?.content_markdown ?? '');
 	let sourceUrl = $state(existingNote?.source_url ?? prefill?.source_url ?? null);
@@ -223,8 +236,16 @@
 		inFlight = true;
 		saveState = 'saving';
 
+		// Read once, synchronously: `id` can change out from under this async
+		// function if the user taps a peer thought (switchTo) while this save
+		// is still in flight, and the write below has to land on the note it
+		// was actually started for — never on whatever's active by the time
+		// the network comes back.
+		const persistingId = id;
+		const persistingDraftKey = draftKey;
+
 		try {
-			if (!id) {
+			if (!persistingId) {
 				const res = await fetch('/api/notes', {
 					method: 'POST',
 					headers: { 'content-type': 'application/json' },
@@ -249,11 +270,17 @@
 				// The draft moves with the note: it was filed under the client id
 				// until the server gave us a real one.
 				clearDraft(clientId);
-				id = note.id;
+				// Only claim the new id if this is still the note on screen —
+				// switching away mid-request must not stamp its id onto
+				// whatever's active now.
+				if (id === persistingId) {
+					id = note.id;
+					history.replaceState(history.state, '', `/note/${id}`);
+				}
 				// If we already handed this note to the stream on the way out,
-				// give that copy the real id so it stops reading as unsynced.
+				// give that copy the real id so it stops reading as unsynced,
+				// regardless of what's on screen now.
 				settlePending(clientId, note.id);
-				history.replaceState(history.state, '', `/note/${id}`);
 			} else {
 				const body: Record<string, unknown> = {};
 				if (!saved || saved.title !== next.title) body.title = next.title;
@@ -264,7 +291,7 @@
 				if (!saved || saved.tags !== next.tags) body.tagNames = tags.map((t) => t.name);
 
 				if (Object.keys(body).length > 0) {
-					const res = await fetch(`/api/notes/${id}`, {
+					const res = await fetch(`/api/notes/${persistingId}`, {
 						method: 'PATCH',
 						headers: { 'content-type': 'application/json' },
 						body: JSON.stringify(body)
@@ -276,10 +303,16 @@
 				}
 			}
 
-			saved = next;
-			// The server has it now, so the crash mat isn't holding anything the
-			// server isn't.
-			clearDraft(draftKey);
+			// Same guard as the id above: if a switch happened mid-request,
+			// `saved`/`title`/`content` now belong to a different thought, and
+			// stamping this response's snapshot over them would make the note
+			// actually on screen look saved when it isn't.
+			if (id === persistingId) {
+				saved = next;
+				// The server has it now, so the crash mat isn't holding anything
+				// the server isn't.
+				clearDraft(persistingDraftKey);
+			}
 			saveState = 'saved';
 		} catch {
 			// Offline or the request died. Leave `saved` alone so the next
@@ -292,6 +325,183 @@
 				persist();
 			}
 		}
+	}
+
+	/**
+	 * Move to a peer thought without leaving the page.
+	 *
+	 * Every member of this thread already arrived with the initial load
+	 * (`+page.server.ts` fetches the whole thing, not just this note's
+	 * children), so switching which one is open is just swapping which
+	 * fields the editor is bound to — never a fetch, never a navigation.
+	 * `history.replaceState` keeps the URL honest (refresh, share, bookmark
+	 * all still land on the right thought) without SvelteKit treating it as
+	 * a route change, which is what would otherwise remount this component
+	 * and reset your scroll position on every tap.
+	 */
+	function switchTo(targetId: string, coords?: { x: number; y: number }) {
+		if (targetId === id) {
+			editor?.focusEditor(coords);
+			return;
+		}
+		const target = threadItems.find((t) => t.id === targetId);
+		if (!target) {
+			// Not part of this thread — shouldn't happen (every Thought this
+			// component renders comes from threadItems itself), but a real
+			// navigation is a safe fallback over silently doing nothing.
+			goto(`/note/${targetId}`);
+			return;
+		}
+
+		// Flush whatever's mid-sentence on the thought we're leaving before its
+		// fields get overwritten. persist() reads `id` synchronously before its
+		// first await, so this is guaranteed to save the outgoing thought, not
+		// the one we're about to switch to.
+		persist();
+
+		id = target.id;
+		title = target.title;
+		content = target.content_markdown;
+		sourceUrl = target.source_url;
+		linkTitle = target.source_title;
+		linkDescription = target.source_description;
+		linkImage = target.source_image;
+		pinned = target.pinned;
+		tags = target.tags.map((t) => ({ id: t.id, name: t.name }));
+		saved = snapshot();
+
+		history.replaceState(history.state, '', `/note/${target.id}`);
+		queueMicrotask(() => {
+			editor?.focusEditor(coords);
+		});
+	}
+
+	/* ---------------- adding a thought without leaving ----------------
+
+	   This used to be a button that attached the thread to the *global*
+	   composer and navigated to the stream to use it — so continuing the
+	   thing you were just reading meant leaving it. The note page never had
+	   its own way to write; every other page borrows the composer mounted
+	   there. This is that composer, boiled down to what a continuation
+	   actually needs (text, optionally a photo) and inlined at the end of
+	   the thread it's continuing, so sending it lands the new thought right
+	   here without going anywhere.
+	*/
+	let addText = $state('');
+	let addTextarea = $state<HTMLTextAreaElement | null>(null);
+	let addPhotoInput = $state<HTMLInputElement | null>(null);
+	let addPhotoDataUrl = $state<string | null>(null);
+	let addPhotoMediaId = $state<string | null>(null);
+	let addPhotoUploadStart = $state<Promise<PendingMedia> | null>(null);
+	let addPhotoUploadError = $state(false);
+	let addPhotoTooLarge = $state(false);
+	let addBusy = $state(false);
+	const MAX_ADD_PHOTO_BYTES = 4 * 1024 * 1024;
+
+	let addHasContent = $derived(addText.trim().length > 0 || Boolean(addPhotoDataUrl));
+
+	function pickAddPhoto() {
+		addPhotoInput?.click();
+	}
+
+	function onAddPhotoChosen(event: Event) {
+		const input = event.currentTarget as HTMLInputElement;
+		const file = input.files?.[0];
+		input.value = '';
+		if (!file) return;
+
+		addPhotoTooLarge = file.size > MAX_ADD_PHOTO_BYTES;
+		if (addPhotoTooLarge) return;
+
+		addPhotoMediaId = null;
+		addPhotoUploadError = false;
+		const reader = new FileReader();
+		reader.onload = () => (addPhotoDataUrl = reader.result as string);
+		reader.readAsDataURL(file);
+
+		const started = beginMediaUpload(file, 'image');
+		addPhotoUploadStart = started;
+		started
+			.then(({ id: mediaId, whenUploaded }) => {
+				if (addPhotoUploadStart !== started) return; // superseded by a later pick/clear
+				addPhotoMediaId = mediaId;
+				whenUploaded.catch(() => {
+					if (addPhotoUploadStart !== started) return;
+					addPhotoMediaId = null;
+					addPhotoUploadError = true;
+				});
+			})
+			.catch(() => {
+				if (addPhotoUploadStart === started) addPhotoUploadError = true;
+			});
+	}
+
+	function clearAddPhoto() {
+		addPhotoDataUrl = null;
+		addPhotoMediaId = null;
+		addPhotoUploadStart = null;
+		addPhotoUploadError = false;
+		addPhotoTooLarge = false;
+	}
+
+	function buildAddContent(): string {
+		const parts: string[] = [];
+		if (addPhotoMediaId) parts.push(`![](/api/media/${addPhotoMediaId})`);
+		const t = addText.trim();
+		if (t) parts.push(t);
+		return parts.join('\n\n');
+	}
+
+	async function addThought() {
+		if (!addHasContent || addBusy) return;
+		addBusy = true;
+
+		if (addPhotoDataUrl && !addPhotoMediaId && addPhotoUploadStart && !addPhotoUploadError) {
+			await addPhotoUploadStart.catch(() => {});
+		}
+
+		const content = buildAddContent();
+		if (!content) {
+			addBusy = false;
+			return;
+		}
+
+		// A continuation always hangs off the head of the thread, never off
+		// whichever thought happens to be open — it reads the same whether you
+		// added it from the first thought or the fifth. See thread.ts.
+		const root = threadItems[0] ?? activeNote;
+		const inheritedTags = (root?.tags ?? []).map((t) => t.name);
+
+		const entry = queueNote({
+			title: '',
+			content_markdown: content,
+			source_url: null,
+			source_type: null,
+			source_title: null,
+			source_description: null,
+			source_image: null,
+			parent_id: root?.id ?? id,
+			tagNames: inheritedTags.map(normalizeTagName).filter(Boolean)
+		});
+
+		// Appears in the thread immediately — the POST is already on its way,
+		// and there's nothing here worth making the reader wait for.
+		threadItems = [...threadItems, asNote(entry)];
+
+		addText = '';
+		clearAddPhoto();
+		addBusy = false;
+		queueMicrotask(() => addTextarea?.focus());
+
+		syncEntry(
+			entry,
+			(serverId) => {
+				threadItems = threadItems.map((n) =>
+					n.client_id === entry.client_id ? { ...n, id: serverId } : n
+				);
+			},
+			() => showToast('Saved on this device — will sync', { duration: 2600 })
+		);
 	}
 
 	function addTag() {
@@ -475,17 +685,41 @@
 	</header>
 
 	{#if before.length > 0}
-		<div class="mb-7 space-y-6">
+		<div class="mb-3 space-y-3">
 			{#each before as thought (thought.id)}
-				<Thought note={thought} href={`/note/${thought.id}`} />
+				<Thought
+					note={thought}
+					href={null}
+					onnavigate={isPending(thought) ? null : switchTo}
+				/>
 			{/each}
 		</div>
 	{/if}
 
-	<div bind:this={editorBlock} style="scroll-margin-top: 3.5rem;">
-		{#if inThread && existingNote}
-			<p class="mb-1.5 text-[0.72rem] font-bold tabular-nums" style="color: var(--color-accent);">
-				{timeOfDay(existingNote.created_at)} · editing
+	<!--
+		The card the peer thoughts above and below (Thought.svelte) already
+		wear, so the one you're actually editing reads as the same kind of
+		thing as its neighbours — a stack of equal cards, not a document with
+		"replies" hanging off it. The `view-transition-name` is what an entry
+		in the stream (Entry.svelte) morphs into: tapping a note grows it into
+		this card instead of navigating away from the stream to a new page.
+	-->
+	<div
+		bind:this={editorBlock}
+		class="cursor-text rounded-[var(--radius-lg)] p-4"
+		style="scroll-margin-top: 3.5rem; background: var(--color-surface); {activeNote?.id
+			? `view-transition-name: note-${activeNote.id};`
+			: ''}"
+		onclick={(e) => {
+			const target = e.target as HTMLElement;
+			if (target.closest('button') || target.closest('a') || target.closest('input')) return;
+			editor?.focusEditor({ x: e.clientX, y: e.clientY });
+		}}
+		role="presentation"
+	>
+		{#if inThread && activeNote}
+			<p class="mb-2 text-[0.72rem] font-bold tabular-nums" style="color: var(--color-accent);">
+				{timeOfDay(activeNote.created_at)} · editing
 			</p>
 		{/if}
 
@@ -546,47 +780,14 @@
 			</a>
 		{/if}
 
-		<!--
-		A textarea rather than an <input>: Chrome on Android offers password /
-		credit-card / address autofill on single-line text inputs, which put a
-		row of unwanted suggestions above the keyboard on every note. A
-		textarea gets no such treatment, and it lets a long title wrap instead
-		of scrolling sideways. `field-sizing: content` (layout.css) keeps it
-		one line tall until it actually needs two.
-	-->
-		<textarea
-			bind:value={title}
-			rows="1"
-			placeholder="Title"
-			autocomplete="off"
-			autocapitalize="sentences"
-			enterkeyhint="next"
-			onkeydown={(e) => {
-				if (e.key === 'Enter') {
-					e.preventDefault();
-					editor?.focusEditor();
-				}
-			}}
-			class="mb-1.5 w-full resize-none overflow-hidden bg-transparent font-serif font-semibold tracking-tight outline-none"
-			class:text-xl={!inThread}
-			class:text-[1.02rem]={inThread}
-			style="color: var(--color-ink);"></textarea>
-
 		<MarkdownEditor bind:this={editor} bind:value={content} bind:focused={editorFocused} />
-	</div>
 
-	<div
-		bind:this={toolbarBar}
-		class="sticky bottom-0 -mx-4 flex flex-wrap items-center gap-1.5 px-4 pt-2 pb-2"
-		style="background: var(--color-bg); border-top: 1px solid var(--color-border);"
-	>
-		{#if showToolbar}
-			<EditorToolbar onaction={(action) => editor?.applyFormat(action)} />
-		{:else}
+		<!-- Tags placed cleanly inside the card footer -->
+		<div class="mt-3 flex flex-wrap items-center gap-1.5 pt-1">
 			{#each tags as tag, i (tag.id ?? `new-${i}`)}
 				{#if editingTagIndex === i}
 					<span
-						class="flex items-center gap-1 rounded-full px-2.5 py-1 text-xs"
+						class="flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs"
 						style="background: var(--color-accent-soft);"
 					>
 						<input
@@ -603,18 +804,19 @@
 								}
 							}}
 							onblur={commitEditTag}
-							class="w-16 bg-transparent outline-none"
+							class="w-16 bg-transparent text-xs font-bold outline-none"
 							style="color: var(--color-accent);"
 						/>
 					</span>
 				{:else}
 					<span
-						class="flex items-center gap-1 rounded-full py-1 pr-1.5 pl-2.5 text-xs"
-						style="background: var(--color-accent-soft); color: var(--color-accent);"
+						class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[0.78rem] font-bold"
+						style="background: var(--color-surface-2);"
 					>
 						<button
 							onclick={() => startEditTag(i)}
 							class="max-w-32 truncate"
+							style="color: var(--color-accent);"
 							aria-label={`Edit tag ${tag.name}`}
 						>
 							#{tag.name}
@@ -622,9 +824,10 @@
 						<button
 							onclick={() => removeTag(i)}
 							aria-label={`Remove tag ${tag.name}`}
-							class="flex h-3.5 w-3.5 items-center justify-center opacity-70"
+							class="flex h-3.5 w-3.5 items-center justify-center opacity-60 hover:opacity-100"
+							style="color: var(--color-ink-muted);"
 						>
-							<span aria-hidden="true">×</span>
+							<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
 						</button>
 					</span>
 				{/if}
@@ -642,17 +845,31 @@
 					}
 				}}
 				onblur={addTag}
-				placeholder={tags.length ? 'Add tag' : 'Add tags…'}
-				class="min-w-20 flex-1 bg-transparent py-1 text-xs outline-none"
+				placeholder={tags.length ? '+ Tag' : '+ Add tag'}
+				class="bg-transparent py-0.5 px-1 text-xs font-medium outline-none"
 				style="color: var(--color-ink-muted);"
 			/>
-		{/if}
+		</div>
 	</div>
 
+	{#if showToolbar}
+		<div
+			bind:this={toolbarBar}
+			class="sticky bottom-0 -mx-4 flex flex-wrap items-center gap-1.5 px-4 pt-2 pb-2"
+			style="background: var(--color-bg);"
+		>
+			<EditorToolbar onaction={(action) => editor?.applyFormat(action)} />
+		</div>
+	{/if}
+
 	{#if after.length > 0}
-		<div class="mt-7 space-y-6">
+		<div class="mt-3 space-y-3">
 			{#each after as thought (thought.id)}
-				<Thought note={thought} href={`/note/${thought.id}`} />
+				<Thought
+					note={thought}
+					href={null}
+					onnavigate={isPending(thought) ? null : switchTo}
+				/>
 			{/each}
 		</div>
 	{/if}
@@ -660,28 +877,112 @@
 	<!--
 		Adding always lands at the end of the thread, never "under" whichever
 		thought you happen to have open — so it reads the same whether you got
-		here from the first thought or the fifth.
+		here from the first thought or the fifth. It also lands right here,
+		inline, rather than sending you off to find a composer somewhere else:
+		reaching the end of a thread is exactly when you'd want to add to it.
 	-->
-	{#if existingNote}
-		<button
-			type="button"
-			class="mt-7 flex items-center gap-2 self-start rounded-full py-2 pr-4 pl-3 text-[0.82rem] font-bold active:scale-95"
-			style="background: var(--color-accent-soft); color: var(--color-accent);"
-			onclick={() => {
-				writeInto(stubOf(thread[0] ?? existingNote));
-				goto('/');
-			}}
+	{#if activeNote}
+		<div
+			class="mt-7 flex flex-col gap-2 rounded-[var(--radius-lg)] p-3"
+			style="background: var(--color-surface-2);"
 		>
-			<svg
-				width="14"
-				height="14"
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				stroke-width="3"
-				stroke-linecap="round"><path d="M12 5v14M5 12h14" /></svg
-			>
-			Add a thought
-		</button>
+			{#if addPhotoDataUrl}
+				<div class="relative inline-block w-fit">
+					<img
+						src={addPhotoDataUrl}
+						alt=""
+						class="h-20 w-20 rounded-[var(--radius-lg)] object-cover"
+						style="background: var(--color-surface);"
+					/>
+					<button
+						type="button"
+						aria-label="Remove photo"
+						class="absolute -top-1.5 -right-1.5 grid h-5 w-5 place-items-center rounded-full text-[10px]"
+						style="background: var(--color-ink); color: var(--color-bg);"
+						onclick={clearAddPhoto}
+					>
+						✕
+					</button>
+				</div>
+			{/if}
+			{#if addPhotoTooLarge}
+				<p class="text-[0.78rem]" style="color: var(--color-danger);">
+					That photo's too large to attach right now (4MB max).
+				</p>
+			{/if}
+			{#if addPhotoUploadError}
+				<p class="text-[0.78rem]" style="color: var(--color-danger);">
+					Couldn't upload that photo — check your connection and try again.
+				</p>
+			{/if}
+
+			<textarea
+				bind:this={addTextarea}
+				bind:value={addText}
+				placeholder="Add a thought…"
+				rows="1"
+				class="max-h-[38vh] w-full resize-none overflow-y-auto bg-transparent font-serif text-[1rem] leading-[1.44] tracking-[-0.015em] outline-none"
+				onkeydown={(e) => {
+					if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+						e.preventDefault();
+						addThought();
+					}
+				}}
+			></textarea>
+
+			<div class="flex items-center gap-2">
+				<button
+					type="button"
+					aria-label="Photo"
+					class="grid h-8 w-8 shrink-0 place-items-center rounded-full"
+					style="background: var(--color-surface); color: var(--color-ink-2);"
+					onclick={pickAddPhoto}
+				>
+					<svg
+						width="15"
+						height="15"
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="1.9"
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						><rect x="3" y="4" width="18" height="16" rx="3" /><circle
+							cx="8.5"
+							cy="9.5"
+							r="1.5"
+						/><path d="M3 16l5-4 4 3 3-2 6 4" /></svg
+					>
+				</button>
+				<input
+					bind:this={addPhotoInput}
+					type="file"
+					accept="image/*"
+					class="hidden"
+					onchange={onAddPhotoChosen}
+				/>
+
+				<span class="flex-1"></span>
+
+				<button
+					type="button"
+					disabled={!addHasContent || addBusy}
+					class="flex h-8 items-center gap-1.5 rounded-full px-3.5 text-[0.8rem] font-bold active:scale-95 disabled:opacity-40"
+					style="background: var(--color-accent); color: var(--color-accent-ink);"
+					onclick={addThought}
+				>
+					<svg
+						width="12"
+						height="12"
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="3.4"
+						stroke-linecap="round"><path d="M12 5v14M5 12h14" /></svg
+					>
+					Add
+				</button>
+			</div>
+		</div>
 	{/if}
 </div>

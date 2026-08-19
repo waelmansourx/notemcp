@@ -48,4 +48,7 @@ export interface ThreadStub {
 	/** Thoughts added since the first one. */
 	count: number;
 	at: string;
+	/** The entity's tags, carried along so continuing it can inherit them
+	 *  without a second round trip — see composer.svelte.ts's `attach`. */
+	tags: Tag[];
 }
