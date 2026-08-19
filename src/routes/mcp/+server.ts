@@ -88,7 +88,8 @@ const TOOLS = [
 const CORS_HEADERS = {
 	'Access-Control-Allow-Origin': '*',
 	'Access-Control-Allow-Methods': 'POST, OPTIONS',
-	'Access-Control-Allow-Headers': 'Content-Type, Authorization, Mcp-Session-Id, Mcp-Protocol-Version'
+	'Access-Control-Allow-Headers':
+		'Content-Type, Authorization, Mcp-Session-Id, Mcp-Protocol-Version'
 };
 
 function rpcResult(id: unknown, result: unknown) {
@@ -124,7 +125,11 @@ async function callTool(
 	switch (name) {
 		case 'search_notes':
 			fn = 'mcp_search_notes';
-			rpcArgs = { p_token: token, p_query: String(args.query ?? ''), p_limit: clampLimit(args.limit) };
+			rpcArgs = {
+				p_token: token,
+				p_query: String(args.query ?? ''),
+				p_limit: clampLimit(args.limit)
+			};
 			break;
 		case 'list_recent_notes':
 			fn = 'mcp_list_recent_notes';
@@ -159,7 +164,11 @@ async function callTool(
 			break;
 		case 'append_to_note':
 			fn = 'mcp_append_to_note';
-			rpcArgs = { p_token: token, p_note_id: args.id, p_content_markdown: args.content_markdown ?? '' };
+			rpcArgs = {
+				p_token: token,
+				p_note_id: args.id,
+				p_content_markdown: args.content_markdown ?? ''
+			};
 			break;
 		case 'tag_note':
 			fn = 'mcp_tag_note';
@@ -186,7 +195,11 @@ export const POST: RequestHandler = async ({ request, locals: { supabase } }) =>
 	const auth = request.headers.get('authorization') ?? '';
 	const token = auth.toLowerCase().startsWith('bearer ') ? auth.slice(7).trim() : null;
 
-	let body: { id?: unknown; method?: string; params?: { name?: string; arguments?: Record<string, unknown> } };
+	let body: {
+		id?: unknown;
+		method?: string;
+		params?: { name?: string; arguments?: Record<string, unknown> };
+	};
 	try {
 		body = await request.json();
 	} catch {

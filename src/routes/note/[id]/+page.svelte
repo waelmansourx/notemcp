@@ -12,6 +12,12 @@
 	>
 </svelte:head>
 
-{#key data.note.id}
-	<NoteEditor existingNote={data.note} thread={data.thread} />
+{#key `${data.note.id}:${data.group ?? ''}`}
+	<NoteEditor
+		existingNote={data.note}
+		group={data.group}
+		groups={data.groups}
+		peers={data.peers}
+		total={data.total}
+	/>
 {/key}

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { Tag } from '$lib/types';
+	import type { GroupStub } from '$lib/types';
 	import { normalizeTagName } from '$lib/tags';
 
 	let {
@@ -8,7 +8,9 @@
 		onpick
 	}: {
 		selected: string[];
-		recent?: Tag[];
+		/** The groups you've been in lately, most recent first. Picking one is
+		 *  how a thought gets filed — there is no other "where does this go?". */
+		recent?: GroupStub[];
 		/** Called after any pick, so the host can put the caret back where the
 		 *  user was actually writing. */
 		onpick?: () => void;

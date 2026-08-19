@@ -66,33 +66,6 @@ async function findByClientId(
 	return data ? normalize(data) : null;
 }
 
-/**
- * Resolve what a new thought is continuing.
- *
- * Returns the id of the note at the *head* of that thread, or null. Pointing
- * at a continuation resolves to the note it belongs to, so threads stay one
- * level deep; pointing at someone else's note resolves to nothing rather than
- * to an error, because losing the thought is worse than losing the link.
- */
-async function resolveParent(
-	supabase: SupabaseClient,
-	userId: string,
-	parentId: string | null
-): Promise<string | null> {
-	if (!parentId) return null;
-
-	const { data } = await supabase
-		.from('notes')
-		.select('id, parent_id')
-		.eq('id', parentId)
-		.eq('user_id', userId)
-		.is('deleted_at', null)
-		.maybeSingle();
-
-	if (!data) return null;
-	return (data.parent_id as string | null) ?? (data.id as string);
-}
-
 export async function createNote(
 	supabase: SupabaseClient,
 	userId: string,
@@ -104,7 +77,6 @@ export async function createNote(
 		source_title?: string | null;
 		source_description?: string | null;
 		source_image?: string | null;
-		parent_id?: string | null;
 		pinned?: boolean;
 		tagNames?: string[];
 		client_id?: string | null;
@@ -123,14 +95,13 @@ export async function createNote(
 		if (existing) return existing;
 	}
 
-	const parentId = await resolveParent(supabase, userId, input.parent_id ?? null);
-
+	// No parent_id: a note is never written underneath another note. Where it
+	// goes is which tags it carries, applied below.
 	const { data, error: insertError } = await supabase
 		.from('notes')
 		.insert({
 			user_id: userId,
 			client_id: clientId,
-			parent_id: parentId,
 			title: input.title ?? '',
 			content_markdown: input.content_markdown ?? '',
 			source_url: input.source_url ?? null,

@@ -6,9 +6,8 @@
 	import { normalizeTagName } from '$lib/tags';
 	import { queueNote, syncEntryNow } from '$lib/outbox';
 	import { addPending, removePending } from '$lib/stream.svelte';
-	import { continuation, attach, detach, restore, touch } from '$lib/composer.svelte';
-	import ThreadStrip from '$lib/components/ThreadStrip.svelte';
-	import { QUICK_TAGS, type Tag, type ThreadStub } from '$lib/types';
+	import { filing, fileInto, unfile, restore } from '$lib/composer.svelte';
+	import { QUICK_TAGS, type GroupStub } from '$lib/types';
 	import { fly, fade } from 'svelte/transition';
 	import { quintOut } from 'svelte/easing';
 
@@ -51,28 +50,23 @@
 	let displayTitle = $derived(fetchedTitle || fallbackTitle);
 	let displaySubtext = $derived(fetchedDescription || fallbackSubtext);
 
-	// If you were already adding to a thread when you shared this, the share
+	// If you were already writing in a tag when you shared this, the share
 	// lands there too — collecting four links into one place is the whole
-	// point. It's never silent: the chip below the preview says where this is
-	// going and gets you out of it in one tap.
+	// point. It's never silent: that tag is the first button in the grid and
+	// wears the group marker, so where this is going is visible before you tap.
 	onMount(restore);
 
 	// Sharing from another app is a capture surface in its own right, not a
-	// fallback for the in-app composer — so it gets the same offer to continue
-	// an earlier thread, and the same row of your own tags, instead of only
-	// inheriting a thread by luck of the 30-minute sticky window and choosing
-	// between five hard-coded tags.
-	let recentThreads = $derived(
-		((page.data.recentThreads ?? []) as ThreadStub[]).filter(
-			(t) => t.id !== continuation.target?.id
-		)
-	);
-	// Your own tags first, topped up from the defaults so the grid is always
-	// full — six is what fits two rows without the sheet growing a scroll.
-	let recentTags = $derived((page.data.recentTags ?? []) as Tag[]);
+	// fallback for the in-app composer — so it offers the same groups the
+	// composer does, instead of choosing between five hard-coded tags.
+	let recentGroups = $derived((page.data.recentGroups ?? []) as GroupStub[]);
+
+	// The tag you're already in first, then your own, topped up from the
+	// defaults so the grid is always full — six fits two rows without the
+	// sheet growing a scroll.
 	let quickTags = $derived.by(() => {
 		const names: string[] = [];
-		for (const name of [...recentTags.map((t) => t.name), ...QUICK_TAGS]) {
+		for (const name of [filing.tag, ...recentGroups.map((g) => g.name), ...QUICK_TAGS]) {
 			if (name && !names.includes(name)) names.push(name);
 		}
 		return names.slice(0, 6);
@@ -159,6 +153,8 @@
 		submitted = true;
 		savedTag = key;
 
+		const names = tagNames.map(normalizeTagName).filter(Boolean);
+
 		const entry = queueNote({
 			title: displayTitle,
 			content_markdown: buildContent(),
@@ -167,10 +163,14 @@
 			source_title: fetchedTitle,
 			source_description: fetchedDescription,
 			source_image: fetchedImage,
-			parent_id: continuation.target?.id ?? null,
-			tagNames: tagNames.map(normalizeTagName).filter(Boolean)
+			tagNames: names
 		});
-		touch();
+
+		// Where this went is where the next thought goes — including back in the
+		// app, since the sticky group is shared by every capture surface.
+		// "Just save" is an explicit no-tag, so it also means "not there any more".
+		if (names[0]) fileInto(names[0]);
+		else unfile();
 
 		// The note is durable in localStorage the moment queueNote() returns,
 		// and the server now keys on client_id so a retry can't duplicate it.
@@ -316,59 +316,30 @@
 				></textarea>
 			</div>
 
-			<!-- Where it goes, then what it's about — the composer's order. -->
-			{#if continuation.target}
-				<div
-					class="mb-2.5 flex shrink-0 items-center gap-2 rounded-[14px] py-1.5 pr-1.5 pl-2.5"
-					style="background: var(--color-accent-soft);"
-				>
-					<span class="shrink-0 text-[0.85rem] leading-none" style="color: var(--color-accent);"
-						>&#8627;</span
-					>
-					{#if continuation.target.image}
-						<img
-							src={continuation.target.image}
-							alt=""
-							class="h-7 w-7 shrink-0 rounded-[8px] object-cover"
-							style="background: var(--color-surface-2);"
-						/>
-					{/if}
-					<span
-						class="min-w-0 flex-1 truncate text-[0.8rem] font-bold tracking-[-0.015em]"
-						style="color: var(--color-accent);"
-					>
-						{continuation.target.label}
-					</span>
-					<button
-						type="button"
-						aria-label="Save on its own instead"
-						class="grid h-6 w-6 shrink-0 place-items-center rounded-full text-[0.68rem] active:scale-90"
-						style="background: color-mix(in srgb, var(--color-accent) 16%, transparent); color: var(--color-accent);"
-						onclick={detach}
-					>
-						&#10005;
-					</button>
-				</div>
-			{:else if recentThreads.length > 0}
-				<ThreadStrip threads={recentThreads} onSelect={attach} />
-			{/if}
-
 			<!--
 				Six tags, and tapping one saves. Selecting a tag and then
 				confirming is the right shape inside the app, where you're
 				already writing; here you're standing in another app with the
 				thing half-shared, and the whole value is that filing it costs
 				one tap. So the tag *is* the button.
+
+				This grid used to sit under a strip of recent notes to continue —
+				two different answers to "where does this go?", one of which made
+				a group have a head. There is one answer now, and the tag you're
+				already in is simply the first button, marked.
 			-->
 			<div class="mb-2.5 grid shrink-0 grid-cols-3 gap-2">
 				{#each quickTags as tag (tag)}
+					{@const current = tag === filing.tag}
 					<button
 						type="button"
 						disabled={submitted}
 						class="flex h-[2.75rem] items-center justify-center rounded-[14px] text-[0.9rem] font-bold tracking-[-0.015em] active:scale-[0.97] disabled:opacity-40"
 						style={savedTag === tag
 							? 'background: var(--color-success-soft); color: var(--color-success);'
-							: 'background: var(--color-surface-2); color: var(--color-ink);'}
+							: current
+								? 'background: var(--color-accent-soft); color: var(--color-accent);'
+								: 'background: var(--color-surface-2); color: var(--color-ink);'}
 						onclick={() => save([tag], tag)}
 					>
 						{#if savedTag === tag}
@@ -383,7 +354,7 @@
 								stroke-linejoin="round"><path d="M20 6 9 17l-5-5" /></svg
 							>
 						{:else}
-							<span style="color: var(--color-accent);">#</span>{tag}
+							<span style={current ? '' : 'color: var(--color-accent);'}>#</span>{tag}
 						{/if}
 					</button>
 				{/each}

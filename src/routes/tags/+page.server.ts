@@ -1,12 +1,12 @@
 import type { PageServerLoad } from './$types';
-import type { Tag, ThreadStub } from '$lib/types';
+import type { Tag, NoteStub } from '$lib/types';
 
 export type TagGroup = {
 	tag: Tag;
 	count: number;
 	/** The most recent notes carrying this tag — enough to fill the card's
 	 *  pages, not the whole tag. */
-	notes: ThreadStub[];
+	notes: NoteStub[];
 };
 
 /** Three rows to a page, three pages: enough that a tag reads as a place with
@@ -21,8 +21,7 @@ const PER_TAG = 9;
  * computed column that trims the body in Postgres, so those bytes never leave
  * the database.
  */
-const PREVIEW_SELECT =
-	'id, title, source_title, source_image, source_url, updated_at, preview, thread_count';
+const PREVIEW_SELECT = 'id, title, source_title, source_image, source_url, updated_at, preview';
 
 function label(row: any): string {
 	const raw = (row.source_title || row.title || row.preview || '').replace(/\s+/g, ' ').trim();
@@ -65,7 +64,7 @@ export const load: PageServerLoad = async ({ locals: { supabase, user } }) => {
 		.in('id', noteIds)
 		.order('updated_at', { ascending: false });
 
-	const stubs = new Map<string, ThreadStub>();
+	const stubs = new Map<string, NoteStub>();
 	const rank = new Map<string, number>();
 	(noteRows ?? []).forEach((row: any, i) => {
 		stubs.set(row.id, {
@@ -73,7 +72,6 @@ export const load: PageServerLoad = async ({ locals: { supabase, user } }) => {
 			label: label(row),
 			image: row.source_image ?? null,
 			source: hostname(row.source_url ?? null),
-			count: row.thread_count ?? 0,
 			at: row.updated_at
 		});
 		rank.set(row.id, i);

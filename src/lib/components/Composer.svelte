@@ -6,18 +6,18 @@
 	import { queueNote, syncEntry } from '$lib/outbox';
 	import { addPending, removePending } from '$lib/stream.svelte';
 	import { normalizeTagName } from '$lib/tags';
-	import { continuation, attach, detach, touch, restore } from '$lib/composer.svelte';
-	import ThreadStrip from './ThreadStrip.svelte';
+	import { filing, fileInto, unfile, restore } from '$lib/composer.svelte';
 	import TagPicker from './TagPicker.svelte';
-	import type { Tag, ThreadStub } from '$lib/types';
+	import type { GroupStub } from '$lib/types';
 	import { onMount } from 'svelte';
 	import { fly, fade, scale } from 'svelte/transition';
 	import { quintOut } from 'svelte/easing';
 
 	let { contextTag = null }: { contextTag?: string | null } = $props();
 
-	// From the root layout, so the row is the same here as on the share sheet.
-	let recentTags = $derived((page.data.recentTags ?? []) as Tag[]);
+	// The groups on offer, loaded once in the root layout so the row is the
+	// same here as it is on the share sheet.
+	let recentGroups = $derived((page.data.recentGroups ?? []) as GroupStub[]);
 
 	let open = $state(false);
 	let text = $state('');
@@ -39,32 +39,20 @@
 
 	let hasContent = $derived(text.trim().length > 0 || Boolean(photoDataUrl));
 
-	/* ---------------- continuing an earlier thought ---------------- */
+	/* ---------------- the group you're writing in ---------------- */
 
-	// The threads on offer, loaded once in the root layout so they're the same
-	// wherever the composer is. The one you're already in is dropped from the
-	// row — it's shown as the chip above instead.
-	let recentThreads = $derived(
-		((page.data.recentThreads ?? []) as ThreadStub[]).filter(
-			(t) => t.id !== continuation.target?.id
-		)
-	);
-
-	let target = $derived(continuation.target);
-
-	// Short enough to sit in the collapsed bar next to a mic button.
-	let barLabel = $derived(
-		target ? (target.label.length > 24 ? target.label.slice(0, 23) + '…' : target.label) : ''
-	);
+	// The tag you're in, if you're in one. Sticky for half an hour so three
+	// thoughts in a row are one train of thought rather than three decisions.
+	let target = $derived(filing.tag);
 
 	onMount(restore);
 
-	// Tapping "+" on a thread both attaches it and opens the sheet — including
+	// Tapping "+" on a group both files into it and opens the sheet — including
 	// from a screen with no composer on it, since the request survives until
 	// something is there to answer it.
 	$effect(() => {
-		if (!continuation.pendingOpen) return;
-		continuation.pendingOpen = false;
+		if (!filing.pendingOpen) return;
+		filing.pendingOpen = false;
 		openSheet();
 	});
 
@@ -76,8 +64,17 @@
 		if (page.url.pathname !== '/') goto('/');
 	}
 
+	/** What the sheet opens filed under. The tag you're in is already selected
+	 *  rather than announced in a separate chip: the picker *is* where this
+	 *  thought goes, so there's one place to read it and one place to change
+	 *  it. Deselecting is how you leave. */
+	function openingTags(): string[] {
+		const names = [contextTag, filing.tag].filter((t): t is string => Boolean(t));
+		return [...new Set(names)];
+	}
+
 	function openSheet() {
-		selected = contextTag ? [contextTag] : [];
+		selected = openingTags();
 		voiceError = '';
 		clearPhoto();
 		open = true;
@@ -174,6 +171,8 @@
 		const content = buildContent();
 		if (!content) return;
 
+		const tagNames = selected.map(normalizeTagName).filter(Boolean);
+
 		const entry = queueNote({
 			title: '',
 			content_markdown: content,
@@ -182,13 +181,14 @@
 			source_title: null,
 			source_description: null,
 			source_image: null,
-			parent_id: continuation.target?.id ?? null,
-			tagNames: selected.map(normalizeTagName).filter(Boolean)
+			tagNames
 		});
 
-		// Still in the same thread afterwards: three thoughts in a row are one
-		// train of thought, not three separate decisions.
-		touch();
+		// Where this one went is where the next one goes, and leaving is just
+		// saving without a tag — so the sticky group is always exactly what you
+		// last did, never a state you have to remember you're in.
+		if (tagNames[0]) fileInto(tagNames[0]);
+		else unfile();
 
 		// Show it in the stream now. The POST is already on its way and the
 		// entry is durable in localStorage either way, so there is nothing
@@ -233,7 +233,7 @@
 			return;
 		}
 
-		selected = contextTag ? [contextTag] : [];
+		selected = openingTags();
 		interim = '';
 		seconds = 0;
 		recording = true;
@@ -324,32 +324,29 @@
 	style="background: linear-gradient(180deg, transparent 0%, color-mix(in srgb, var(--color-bg) 90%, transparent) 42%, var(--color-bg) 68%); padding-bottom: calc(1.75rem + env(safe-area-inset-bottom));"
 	class:opacity-0={open || recording}
 >
-	<!-- You are in a thread. This is the only thing on screen that says so
-	     while the sheet is closed, so it sits directly above the bar you're
-	     about to type into and carries its own way out. -->
+	<!-- You are in a group. This is the only thing on screen that says so while
+	     the sheet is closed, so it sits directly above the bar you're about to
+	     type into and carries its own way out. -->
 	{#if target}
 		<div class="flex" transition:fly={{ y: 8, duration: 180 }}>
 			<div
 				class="pointer-events-auto flex min-w-0 items-center gap-1.5 rounded-full py-1.5 pr-1.5 pl-3"
 				style="background: var(--color-accent-soft);"
 			>
-				<span class="shrink-0 text-[0.8rem] leading-none" style="color: var(--color-accent);"
-					>&#8627;</span
-				>
 				<button
 					type="button"
 					class="min-w-0 truncate text-[0.78rem] font-bold tracking-[-0.015em]"
 					style="color: var(--color-accent);"
 					onclick={openSheet}
 				>
-					{barLabel}
+					#{target}
 				</button>
 				<button
 					type="button"
-					aria-label="Stop adding to this thought"
+					aria-label={`Stop writing in #${target}`}
 					class="grid h-5 w-5 shrink-0 place-items-center rounded-full text-[0.62rem] active:scale-90"
 					style="background: color-mix(in srgb, var(--color-accent) 16%, transparent); color: var(--color-accent);"
-					onclick={detach}
+					onclick={unfile}
 				>
 					&#10005;
 				</button>
@@ -367,10 +364,10 @@
 			tabindex="0"
 		>
 			<span class="flex-1 truncate text-[1.05rem] font-bold tracking-[-0.02em] opacity-95">
-				{#if target}
-					Add to this thought…
-				{:else if contextTag}
+				{#if contextTag}
 					Write in #{contextTag}…
+				{:else if target}
+					Write in #{target}…
 				{:else}
 					Write something…
 				{/if}
@@ -509,51 +506,17 @@
 		{/if}
 
 		<!--
-			Where this thought goes, offered before you write it.
+			Where this thought goes, offered before you write it — and there is
+			exactly one row that answers it.
 
-			Continuing an earlier note used to mean leaving the composer, finding
-			the note and opening it — three steps that each cost you the thought.
-			The threads come to you instead: one tap turns the draft into an
-			addition, and you never see or reload the note you're adding to.
+			There used to be two: a strip of recent notes to continue, and under
+			it a row of tags. They were two different mechanisms competing for the
+			same question, and the note strip was the one that made a group have a
+			head. The tag is the container now, so the picker is the whole answer:
+			the tag you're already in is simply the chip that's already on.
 		-->
-		{#if target}
-			<div
-				class="mb-2.5 flex shrink-0 items-center gap-2 rounded-[14px] py-1.5 pr-1.5 pl-2.5"
-				style="background: var(--color-accent-soft);"
-			>
-				<span class="shrink-0 text-[0.85rem] leading-none" style="color: var(--color-accent);"
-					>&#8627;</span
-				>
-				{#if target.image}
-					<img
-						src={target.image}
-						alt=""
-						class="h-7 w-7 shrink-0 rounded-[8px] object-cover"
-						style="background: var(--color-surface-2);"
-					/>
-				{/if}
-				<span
-					class="min-w-0 flex-1 truncate text-[0.8rem] font-bold tracking-[-0.015em]"
-					style="color: var(--color-accent);"
-				>
-					{target.label}
-				</span>
-				<button
-					type="button"
-					aria-label="Write on its own instead"
-					class="grid h-6 w-6 shrink-0 place-items-center rounded-full text-[0.68rem] active:scale-90"
-					style="background: color-mix(in srgb, var(--color-accent) 16%, transparent); color: var(--color-accent);"
-					onclick={detach}
-				>
-					&#10005;
-				</button>
-			</div>
-		{:else if recentThreads.length > 0}
-			<ThreadStrip threads={recentThreads} onSelect={attach} />
-		{/if}
-
 		<div class="mb-3">
-			<TagPicker bind:selected recent={recentTags} onpick={() => textarea?.focus()} />
+			<TagPicker bind:selected recent={recentGroups} onpick={() => textarea?.focus()} />
 		</div>
 
 		{#if photoDataUrl}

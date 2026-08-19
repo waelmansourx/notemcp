@@ -26,10 +26,10 @@
 	One thought, drawn the same way every other thought is drawn.
 
 	There is deliberately no indent rail, no smaller type and no "reply"
-	styling: inside a thread every thought is a peer, and the only thing that
-	orders them is the timestamp. The moment a continuation is rendered as a
-	comment on the first note, the first note becomes a document you have to
-	maintain — which is the exact weight this app exists to avoid.
+	styling: inside a group every note is a peer, and the only thing that orders
+	them is the timestamp. The moment one of them is rendered as a comment on
+	another, that other one becomes a document you have to maintain — which is
+	the exact weight this app exists to avoid.
 -->
 <svelte:element
 	this={href ? 'a' : 'div'}

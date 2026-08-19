@@ -58,16 +58,7 @@ export function matchesTags(note: Note, tags: string[]): boolean {
 	return tags.every((t) => own.has(t));
 }
 
-/** A thread matches if any thought in it does — the head, or anything added
- *  to it since. Tagging the fourth thought in a thread has to be enough to
- *  find the thread, and the whole thing then stays intact on screen rather
- *  than being cut down to the one line that matched. */
-function threadMatches(note: Note, tags: string[], q: string): boolean {
-	if (matchesTags(note, tags) && matchesQuery(note, q)) return true;
-	return (note.children ?? []).some((c) => matchesTags(c, tags) && matchesQuery(c, q));
-}
-
 export function applyFilter(notes: Note[], tags: string[], q: string): Note[] {
 	if (tags.length === 0 && !q.trim()) return notes;
-	return notes.filter((n) => threadMatches(n, tags, q));
+	return notes.filter((n) => matchesTags(n, tags) && matchesQuery(n, q));
 }
