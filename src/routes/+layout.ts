@@ -20,5 +20,11 @@ export const load: LayoutLoad = async ({ data, depends, fetch }) => {
 		data: { session }
 	} = await supabase.auth.getSession();
 
-	return { supabase, session };
+	// `...data` is load-bearing, not tidiness. Within one layer a universal
+	// load's return value *replaces* the server load's rather than merging
+	// with it, so anything +layout.server.ts provides — recentThreads,
+	// recentTags — never reached `page.data` without this. That's why the
+	// composer's Continue strip and the share sheet's tag row could look
+	// correct in the source and render empty in the app.
+	return { ...data, supabase, session };
 };

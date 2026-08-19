@@ -8,8 +8,7 @@
 	import { addPending, removePending } from '$lib/stream.svelte';
 	import { continuation, attach, detach, restore, touch } from '$lib/composer.svelte';
 	import ThreadStrip from '$lib/components/ThreadStrip.svelte';
-	import TagPicker from '$lib/components/TagPicker.svelte';
-	import type { Tag, ThreadStub } from '$lib/types';
+	import { QUICK_TAGS, type Tag, type ThreadStub } from '$lib/types';
 	import { fly, fade } from 'svelte/transition';
 	import { quintOut } from 'svelte/easing';
 
@@ -68,14 +67,23 @@
 			(t) => t.id !== continuation.target?.id
 		)
 	);
+	// Your own tags first, topped up from the defaults so the grid is always
+	// full — six is what fits two rows without the sheet growing a scroll.
 	let recentTags = $derived((page.data.recentTags ?? []) as Tag[]);
+	let quickTags = $derived.by(() => {
+		const names: string[] = [];
+		for (const name of [...recentTags.map((t) => t.name), ...QUICK_TAGS]) {
+			if (name && !names.includes(name)) names.push(name);
+		}
+		return names.slice(0, 6);
+	});
 
-	let selected = $state<string[]>([]);
 	let caption = $state('');
 	let captionEl = $state<HTMLTextAreaElement | null>(null);
 
 	let submitted = $state(false);
-	let saved = $state(false);
+	/** Which button is showing its checkmark: a tag name, or 'inbox'. */
+	let savedTag = $state<string | null>(null);
 	let dismissed = $state(false);
 
 	onMount(() => {
@@ -146,10 +154,10 @@
 		window.close();
 	}
 
-	function save() {
+	function save(tagNames: string[], key: string) {
 		if (submitted) return;
 		submitted = true;
-		saved = true;
+		savedTag = key;
 
 		const entry = queueNote({
 			title: displayTitle,
@@ -160,7 +168,7 @@
 			source_description: fetchedDescription,
 			source_image: fetchedImage,
 			parent_id: continuation.target?.id ?? null,
-			tagNames: selected.map(normalizeTagName).filter(Boolean)
+			tagNames: tagNames.map(normalizeTagName).filter(Boolean)
 		});
 		touch();
 
@@ -345,8 +353,40 @@
 				<ThreadStrip threads={recentThreads} onSelect={attach} />
 			{/if}
 
-			<div class="mb-3 shrink-0">
-				<TagPicker bind:selected recent={recentTags} onpick={() => captionEl?.focus()} />
+			<!--
+				Six tags, and tapping one saves. Selecting a tag and then
+				confirming is the right shape inside the app, where you're
+				already writing; here you're standing in another app with the
+				thing half-shared, and the whole value is that filing it costs
+				one tap. So the tag *is* the button.
+			-->
+			<div class="mb-2.5 grid shrink-0 grid-cols-3 gap-2">
+				{#each quickTags as tag (tag)}
+					<button
+						type="button"
+						disabled={submitted}
+						class="flex h-[2.75rem] items-center justify-center rounded-[14px] text-[0.9rem] font-bold tracking-[-0.015em] active:scale-[0.97] disabled:opacity-40"
+						style={savedTag === tag
+							? 'background: var(--color-success-soft); color: var(--color-success);'
+							: 'background: var(--color-surface-2); color: var(--color-ink);'}
+						onclick={() => save([tag], tag)}
+					>
+						{#if savedTag === tag}
+							<svg
+								width="18"
+								height="18"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="2.6"
+								stroke-linecap="round"
+								stroke-linejoin="round"><path d="M20 6 9 17l-5-5" /></svg
+							>
+						{:else}
+							<span style="color: var(--color-accent);">#</span>{tag}
+						{/if}
+					</button>
+				{/each}
 			</div>
 
 			<!-- Dismissing sits at the far left, a whole button away from Save:
@@ -394,13 +434,13 @@
 				<button
 					type="button"
 					disabled={submitted}
-					class="flex h-[2.875rem] flex-1 items-center justify-center gap-2 rounded-full text-[1rem] font-bold tracking-[-0.015em] active:scale-[0.98]"
-					style={saved
+					class="flex h-[2.875rem] flex-1 items-center justify-center gap-1.5 rounded-full text-[1rem] font-bold tracking-[-0.015em] active:scale-[0.98]"
+					style={savedTag === 'inbox'
 						? 'background: var(--color-success-soft); color: var(--color-success);'
 						: 'background: var(--color-accent); color: var(--color-accent-ink); box-shadow: 0 8px 20px rgba(20,80,58,.24);'}
-					onclick={save}
+					onclick={() => save([], 'inbox')}
 				>
-					{#if saved}
+					{#if savedTag === 'inbox'}
 						<svg
 							width="18"
 							height="18"
@@ -413,7 +453,7 @@
 						>
 						Saved
 					{:else}
-						Save
+						Just save<span class="text-[0.82rem] font-medium opacity-75">to Inbox</span>
 					{/if}
 				</button>
 			</div>

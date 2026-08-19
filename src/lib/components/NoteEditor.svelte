@@ -542,7 +542,9 @@
 					editor?.focusEditor();
 				}
 			}}
-			class="mb-1.5 w-full resize-none overflow-hidden bg-transparent font-serif text-xl font-semibold tracking-tight outline-none"
+			class="mb-1.5 w-full resize-none overflow-hidden bg-transparent font-serif font-semibold tracking-tight outline-none"
+			class:text-xl={!inThread}
+			class:text-[1.02rem]={inThread}
 			style="color: var(--color-ink);"></textarea>
 
 		<MarkdownEditor bind:this={editor} bind:value={content} bind:focused={editorFocused} />
