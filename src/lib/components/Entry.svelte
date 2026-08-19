@@ -6,6 +6,7 @@
 	import { lastActivity, stubOf } from '$lib/thread';
 	import { writeInto } from '$lib/composer.svelte';
 	import TagChip from './TagChip.svelte';
+	import Thought from './Thought.svelte';
 
 	let { note, showTime = false }: { note: Note; showTime?: boolean } = $props();
 
@@ -173,36 +174,15 @@
 		</button>
 
 		{#if expanded}
-			<div class="mt-2.5 space-y-3 border-l pl-3.5" style="border-color: var(--color-border);">
+			<!-- No indent rail: a continuation is a peer of the thought above
+			     it, not a reply to it. -->
+			<div class="mt-4 space-y-5">
 				{#each thoughts as thought (thought.id)}
-					{@const inner = extractLeadingImage(thought.content_markdown)}
-					<a href={isPending(thought) ? undefined : `/note/${thought.id}`} class="block">
-						<div class="flex items-start gap-3">
-							{#if thought.source_image || inner.image}
-								<img
-									src={thought.source_image || inner.image}
-									alt=""
-									loading="lazy"
-									class="h-11 w-11 shrink-0 rounded-[12px] object-cover"
-									style="background: var(--color-surface-2);"
-								/>
-							{/if}
-							<p
-								class="min-w-0 flex-1 font-serif text-[1.02rem] leading-[1.45] tracking-[-0.01em] whitespace-pre-wrap"
-							>
-								{thought.source_title?.trim() || excerpt(inner.rest, 240) || 'Untitled'}
-							</p>
-						</div>
-						<div
-							class="mt-1 flex items-center gap-2 text-[0.72rem] font-bold"
-							style="color: var(--color-ink-faint);"
-						>
-							{#each thought.tags as tag (tag.id)}
-								<TagChip {tag} />
-							{/each}
-							<span class="tabular-nums">{timeOfDay(thought.created_at)}</span>
-						</div>
-					</a>
+					<Thought
+						note={thought}
+						href={isPending(thought) ? null : `/note/${thought.id}`}
+						max={240}
+					/>
 				{/each}
 			</div>
 		{/if}

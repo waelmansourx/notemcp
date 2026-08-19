@@ -5,22 +5,19 @@
 	import EditorToolbar from '$lib/components/EditorToolbar.svelte';
 	import { hostname, timeOfDay } from '$lib/dates';
 	import { clearDraft, isNewerThan, pruneDrafts, readDraft, saveDraft } from '$lib/draft.svelte';
-	import { excerpt, extractLeadingImage } from '$lib/markdown';
 	import { stubOf } from '$lib/thread';
 	import { writeInto } from '$lib/composer.svelte';
+	import Thought from './Thought.svelte';
 	import type { Note } from '$lib/types';
 
 	let {
 		existingNote = null,
 		prefill = null,
-		thoughts = [],
-		parent = null
+		thread = []
 	}: {
 		existingNote?: Note | null;
-		/** The rest of this thread, oldest first. */
-		thoughts?: Note[];
-		/** Set when this note is itself a continuation of another. */
-		parent?: { id: string; label: string } | null;
+		/** Every thought in this thread, oldest first, including this one. */
+		thread?: Note[];
 		prefill?: {
 			title?: string;
 			content_markdown?: string;
@@ -30,6 +27,27 @@
 			source_image?: string | null;
 		} | null;
 	} = $props();
+
+	/*
+	 * A thread reads as one conversation, so the thought you opened is shown
+	 * where it actually falls in time — with whatever came before it above and
+	 * whatever came after below — rather than as a document with the others
+	 * filed underneath it as replies. Every thought in a thread is a peer; the
+	 * only thing special about this one is that it's the one you're editing.
+	 */
+	let position = $derived(existingNote ? thread.findIndex((t) => t.id === existingNote.id) : -1);
+	let before = $derived(position > 0 ? thread.slice(0, position) : []);
+	let after = $derived(position >= 0 ? thread.slice(position + 1) : []);
+	let inThread = $derived(thread.length > 1);
+
+	// Opening the fourth thought shouldn't dump you at the first one. The
+	// editor is scrolled to the top of the viewport once, on mount, so you
+	// land on what you tapped and the earlier thoughts are simply above you.
+	let editorBlock = $state<HTMLDivElement | null>(null);
+	onMount(() => {
+		if (before.length === 0 || !editorBlock) return;
+		editorBlock.scrollIntoView({ block: 'start' });
+	});
 
 	let id = $state(existingNote?.id ?? null);
 	let title = $state(existingNote?.title ?? prefill?.title ?? '');
@@ -431,64 +449,79 @@
 		</div>
 	</header>
 
-	{#if sourceUrl}
-		<a
-			href={sourceUrl}
-			target="_blank"
-			rel="noopener noreferrer"
-			class="mb-3 inline-flex w-fit items-center gap-1.5 rounded-full px-3 py-1.5 text-xs"
-			style="background: var(--color-surface-2); color: var(--color-ink-muted);"
-		>
-			<svg
-				width="11"
-				height="11"
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				stroke-width="2.2"
-				stroke-linecap="round"
-				stroke-linejoin="round"
-				><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><path
-					d="M15 3h6v6"
-				/><path d="M10 14 21 3" /></svg
+	{#if before.length > 0}
+		<div class="mb-7 space-y-6">
+			{#each before as thought (thought.id)}
+				<Thought note={thought} href={`/note/${thought.id}`} />
+			{/each}
+		</div>
+	{/if}
+
+	<div bind:this={editorBlock} style="scroll-margin-top: 3.5rem;">
+		{#if inThread && existingNote}
+			<p class="mb-1.5 text-[0.72rem] font-bold tabular-nums" style="color: var(--color-accent);">
+				{timeOfDay(existingNote.created_at)} · editing
+			</p>
+		{/if}
+
+		{#if sourceUrl}
+			<a
+				href={sourceUrl}
+				target="_blank"
+				rel="noopener noreferrer"
+				class="mb-3 inline-flex w-fit items-center gap-1.5 rounded-full px-3 py-1.5 text-xs"
+				style="background: var(--color-surface-2); color: var(--color-ink-muted);"
 			>
-			{hostname(sourceUrl)}
-		</a>
-	{/if}
+				<svg
+					width="11"
+					height="11"
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="2.2"
+					stroke-linecap="round"
+					stroke-linejoin="round"
+					><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><path
+						d="M15 3h6v6"
+					/><path d="M10 14 21 3" /></svg
+				>
+				{hostname(sourceUrl)}
+			</a>
+		{/if}
 
-	{#if linkImage || linkTitle || linkDescription}
-		<a
-			href={sourceUrl ?? undefined}
-			target={sourceUrl ? '_blank' : undefined}
-			rel={sourceUrl ? 'noopener noreferrer' : undefined}
-			class="mb-4 flex gap-3 rounded-[var(--radius-lg)] p-3"
-			style="background: var(--color-surface-2);"
-		>
-			{#if linkImage}
-				<img
-					src={linkImage}
-					alt=""
-					class="h-16 w-16 shrink-0 rounded-[var(--radius-sm)] object-cover"
-					style="background: var(--color-surface);"
-				/>
-			{/if}
-			<div class="min-w-0 flex-1">
-				{#if linkTitle}
-					<p class="truncate text-sm font-medium" style="color: var(--color-ink);">{linkTitle}</p>
+		{#if linkImage || linkTitle || linkDescription}
+			<a
+				href={sourceUrl ?? undefined}
+				target={sourceUrl ? '_blank' : undefined}
+				rel={sourceUrl ? 'noopener noreferrer' : undefined}
+				class="mb-4 flex gap-3 rounded-[var(--radius-lg)] p-3"
+				style="background: var(--color-surface-2);"
+			>
+				{#if linkImage}
+					<img
+						src={linkImage}
+						alt=""
+						class="h-16 w-16 shrink-0 rounded-[var(--radius-sm)] object-cover"
+						style="background: var(--color-surface);"
+					/>
 				{/if}
-				{#if linkDescription}
-					<p
-						class="mt-0.5 line-clamp-2 text-xs leading-snug"
-						style="color: var(--color-ink-muted);"
-					>
-						{linkDescription}
-					</p>
-				{/if}
-			</div>
-		</a>
-	{/if}
+				<div class="min-w-0 flex-1">
+					{#if linkTitle}
+						<p class="truncate text-sm font-medium" style="color: var(--color-ink);">{linkTitle}</p>
+					{/if}
+					{#if linkDescription}
+						<p
+							class="mt-0.5 line-clamp-2 text-xs leading-snug"
+							style="color: var(--color-ink-muted);"
+						>
+							{linkDescription}
+						</p>
+					{/if}
+				</div>
+			</a>
+		{/if}
 
-	<!--
+		<!--
 		A textarea rather than an <input>: Chrome on Android offers password /
 		credit-card / address autofill on single-line text inputs, which put a
 		row of unwanted suggestions above the keyboard on every note. A
@@ -496,23 +529,24 @@
 		of scrolling sideways. `field-sizing: content` (layout.css) keeps it
 		one line tall until it actually needs two.
 	-->
-	<textarea
-		bind:value={title}
-		rows="1"
-		placeholder="Title"
-		autocomplete="off"
-		autocapitalize="sentences"
-		enterkeyhint="next"
-		onkeydown={(e) => {
-			if (e.key === 'Enter') {
-				e.preventDefault();
-				editor?.focusEditor();
-			}
-		}}
-		class="mb-1.5 w-full resize-none overflow-hidden bg-transparent font-serif text-xl font-semibold tracking-tight outline-none"
-		style="color: var(--color-ink);"></textarea>
+		<textarea
+			bind:value={title}
+			rows="1"
+			placeholder="Title"
+			autocomplete="off"
+			autocapitalize="sentences"
+			enterkeyhint="next"
+			onkeydown={(e) => {
+				if (e.key === 'Enter') {
+					e.preventDefault();
+					editor?.focusEditor();
+				}
+			}}
+			class="mb-1.5 w-full resize-none overflow-hidden bg-transparent font-serif text-xl font-semibold tracking-tight outline-none"
+			style="color: var(--color-ink);"></textarea>
 
-	<MarkdownEditor bind:this={editor} bind:value={content} bind:focused={editorFocused} />
+		<MarkdownEditor bind:this={editor} bind:value={content} bind:focused={editorFocused} />
+	</div>
 
 	<div
 		bind:this={toolbarBar}
@@ -588,68 +622,26 @@
 		{/if}
 	</div>
 
-	<!--
-		The rest of the thread, below the note it belongs to.
-
-		Read-only on purpose: each thought is its own note with its own page,
-		and merging them into one editable body would throw away the timestamps
-		that make a thread readable as something that happened over time.
-	-->
-	{#if parent}
-		<a
-			href={`/note/${parent.id}`}
-			class="mt-7 flex items-center gap-1.5 text-[0.78rem] font-bold active:opacity-60"
-			style="color: var(--color-accent);"
-		>
-			<span aria-hidden="true">&#8624;</span>
-			<span class="min-w-0 truncate">Part of “{parent.label}”</span>
-		</a>
-	{/if}
-
-	{#if thoughts.length > 0}
-		<div class="mt-7 border-t pt-4" style="border-color: var(--color-border);">
-			<p
-				class="mb-3 text-[0.7rem] font-extrabold tracking-[0.13em] uppercase"
-				style="color: var(--color-ink-faint);"
-			>
-				{thoughts.length}
-				{thoughts.length === 1 ? 'thought since' : 'thoughts since'}
-			</p>
-
-			<div class="space-y-4 border-l pl-3.5" style="border-color: var(--color-border);">
-				{#each thoughts as thought (thought.id)}
-					{@const inner = extractLeadingImage(thought.content_markdown)}
-					<a href={`/note/${thought.id}`} class="block active:opacity-60">
-						<div class="flex items-start gap-3">
-							{#if thought.source_image || inner.image}
-								<img
-									src={thought.source_image || inner.image}
-									alt=""
-									loading="lazy"
-									class="h-12 w-12 shrink-0 rounded-[14px] object-cover"
-									style="background: var(--color-surface-2);"
-								/>
-							{/if}
-							<p class="min-w-0 flex-1 font-serif text-[1.05rem] leading-[1.5] whitespace-pre-wrap">
-								{thought.source_title?.trim() || excerpt(inner.rest, 400) || 'Untitled'}
-							</p>
-						</div>
-						<p class="mt-1 text-[0.72rem] font-bold" style="color: var(--color-ink-faint);">
-							{timeOfDay(thought.created_at)}
-						</p>
-					</a>
-				{/each}
-			</div>
+	{#if after.length > 0}
+		<div class="mt-7 space-y-6">
+			{#each after as thought (thought.id)}
+				<Thought note={thought} href={`/note/${thought.id}`} />
+			{/each}
 		</div>
 	{/if}
 
-	{#if existingNote && !parent}
+	<!--
+		Adding always lands at the end of the thread, never "under" whichever
+		thought you happen to have open — so it reads the same whether you got
+		here from the first thought or the fifth.
+	-->
+	{#if existingNote}
 		<button
 			type="button"
-			class="mt-5 flex items-center gap-2 self-start rounded-full py-2 pr-4 pl-3 text-[0.82rem] font-bold active:scale-95"
+			class="mt-7 flex items-center gap-2 self-start rounded-full py-2 pr-4 pl-3 text-[0.82rem] font-bold active:scale-95"
 			style="background: var(--color-accent-soft); color: var(--color-accent);"
 			onclick={() => {
-				writeInto(stubOf(existingNote));
+				writeInto(stubOf(thread[0] ?? existingNote));
 				goto('/');
 			}}
 		>

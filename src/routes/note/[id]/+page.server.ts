@@ -4,6 +4,11 @@ import type { Note } from '$lib/types';
 
 const NOTE_SELECT = '*, note_tags(tags(id, name))';
 
+function hydrate(row: any): Note {
+	const { note_tags, ...rest } = row;
+	return { ...rest, tags: (note_tags ?? []).map((nt: any) => nt.tags).filter(Boolean) };
+}
+
 export const load: PageServerLoad = async ({ params, locals: { supabase, user } }) => {
 	const { data, error: fetchError } = await supabase
 		.from('notes')
@@ -15,47 +20,32 @@ export const load: PageServerLoad = async ({ params, locals: { supabase, user } 
 
 	if (fetchError || !data) throw error(404, 'Note not found');
 
-	const { note_tags, ...rest } = data as any;
-	const note: Note = { ...rest, tags: (note_tags ?? []).map((nt: any) => nt.tags).filter(Boolean) };
+	const note = hydrate(data);
 
-	/* The rest of the thread. Opening a note has to show everything that was
-	   added to it — the stream expands a thread in place, so arriving here and
-	   finding only the first thought would read as having lost the others. */
-	const [thoughtsResult, parentResult] = await Promise.all([
-		supabase
-			.from('notes')
-			.select(NOTE_SELECT)
-			.eq('user_id', user!.id)
-			.eq('parent_id', note.id)
-			.is('deleted_at', null)
-			.order('created_at', { ascending: true }),
-		note.parent_id
-			? supabase
-					.from('notes')
-					.select('id, title, source_title, preview')
-					.eq('user_id', user!.id)
-					.eq('id', note.parent_id)
-					.maybeSingle()
-			: Promise.resolve({ data: null })
-	]);
+	/*
+	 * The whole thread, not just what hangs off this note.
+	 *
+	 * `parent_id` is really a thread id that the first thought leaves null, so
+	 * the members of a thread are "the head, plus everything pointing at it" —
+	 * which is one query regardless of which thought you opened. The previous
+	 * version only fetched *children*, so opening the second thought in a
+	 * thread showed none of its siblings: the first thought was the only one
+	 * that could see the rest. That asymmetry is what made a thread read as a
+	 * note with comments rather than as a sequence of equal thoughts.
+	 */
+	const threadId = note.parent_id ?? note.id;
 
-	const thoughts: Note[] = (thoughtsResult.data ?? []).map((row: any) => {
-		const { note_tags: kidTags, ...kid } = row;
-		return { ...kid, tags: (kidTags ?? []).map((nt: any) => nt.tags).filter(Boolean) };
-	});
+	const { data: members } = await supabase
+		.from('notes')
+		.select(NOTE_SELECT)
+		.eq('user_id', user!.id)
+		.is('deleted_at', null)
+		.or(`id.eq.${threadId},parent_id.eq.${threadId}`)
+		.order('created_at', { ascending: true });
 
-	// A continuation says what it belongs to, so you're never looking at a
-	// fragment with no way back to the thought it came from.
-	const head = parentResult.data as any;
-	const parent = head
-		? {
-				id: head.id as string,
-				label: ((head.source_title || head.title || head.preview || 'Untitled') as string).slice(
-					0,
-					60
-				)
-			}
-		: null;
+	// Read as it was written. Falls back to just this note if the thread query
+	// failed — a page that shows one thought is better than one that 500s.
+	const thread: Note[] = (members ?? []).map(hydrate);
 
-	return { note, thoughts, parent };
+	return { note, thread: thread.length > 0 ? thread : [note] };
 };

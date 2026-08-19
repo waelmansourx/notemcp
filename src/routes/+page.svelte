@@ -111,4 +111,4 @@
 	</div>
 </div>
 
-<Composer recentTags={data.recentTags} />
+<Composer />

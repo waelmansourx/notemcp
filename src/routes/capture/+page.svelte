@@ -3,12 +3,13 @@
 	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
 	import { hostname } from '$lib/dates';
-	import { QUICK_TAGS } from '$lib/types';
+	import { normalizeTagName } from '$lib/tags';
 	import { queueNote, syncEntryNow } from '$lib/outbox';
 	import { addPending, removePending } from '$lib/stream.svelte';
 	import { continuation, attach, detach, restore, touch } from '$lib/composer.svelte';
 	import ThreadStrip from '$lib/components/ThreadStrip.svelte';
-	import type { ThreadStub } from '$lib/types';
+	import TagPicker from '$lib/components/TagPicker.svelte';
+	import type { Tag, ThreadStub } from '$lib/types';
 	import { fly, fade } from 'svelte/transition';
 	import { quintOut } from 'svelte/easing';
 
@@ -57,11 +58,25 @@
 	// going and gets you out of it in one tap.
 	onMount(restore);
 
-	// Sharing from another app is a capture path in its own right, not a
-	// fallback for the in-app composer — so it gets the same offer to
-	// continue an earlier thread instead of only inheriting one by luck of
-	// the 30-minute sticky window.
-	let recentThreads = $derived((page.data.recentThreads ?? []) as ThreadStub[]);
+	// Sharing from another app is a capture surface in its own right, not a
+	// fallback for the in-app composer — so it gets the same offer to continue
+	// an earlier thread, and the same row of your own tags, instead of only
+	// inheriting a thread by luck of the 30-minute sticky window and choosing
+	// between five hard-coded tags.
+	let recentThreads = $derived(
+		((page.data.recentThreads ?? []) as ThreadStub[]).filter(
+			(t) => t.id !== continuation.target?.id
+		)
+	);
+	let recentTags = $derived((page.data.recentTags ?? []) as Tag[]);
+
+	let selected = $state<string[]>([]);
+	let caption = $state('');
+	let captionEl = $state<HTMLTextAreaElement | null>(null);
+
+	let submitted = $state(false);
+	let saved = $state(false);
+	let dismissed = $state(false);
 
 	onMount(() => {
 		if (sourceUrl) {
@@ -108,11 +123,6 @@
 		}
 	});
 
-	let caption = $state('');
-	let submitted = $state(false);
-	let submittedKey = $state<string | null>(null);
-	let dismissed = $state(false);
-
 	function buildContent(): string {
 		const parts: string[] = [];
 		if (sharedImageDataUrl) parts.push(`![Shared image](${sharedImageDataUrl})`);
@@ -136,10 +146,10 @@
 		window.close();
 	}
 
-	function saveWith(tagNames: string[], key: string) {
+	function save() {
 		if (submitted) return;
 		submitted = true;
-		submittedKey = key;
+		saved = true;
 
 		const entry = queueNote({
 			title: displayTitle,
@@ -150,7 +160,7 @@
 			source_description: fetchedDescription,
 			source_image: fetchedImage,
 			parent_id: continuation.target?.id ?? null,
-			tagNames
+			tagNames: selected.map(normalizeTagName).filter(Boolean)
 		});
 		touch();
 
@@ -196,28 +206,163 @@
 		onclick={() => leave()}
 		role="presentation"
 	>
+		<!--
+			The share sheet, speaking the composer's language.
+
+			It used to answer "where does this go?" with a 3×2 grid of five
+			hard-coded tags — six big targets competing for attention before
+			you'd even read what you shared. Now it's the same three rows the
+			in-app composer uses, in the same order: what you're saving, where
+			it continues, what it's about. The primary action is still exactly
+			one tap away.
+		-->
 		<div
-			class="safe-bottom flex max-h-[90vh] flex-col rounded-t-[28px] px-4 pt-2.5"
-			style="background: var(--color-bg); box-shadow: 0 -8px 30px rgba(0,0,0,0.18);"
+			class="flex max-h-[92vh] flex-col rounded-t-[1.375rem] px-[1.125rem] pt-[0.625rem]"
+			style="background: var(--color-surface); --fade-to: var(--color-surface); box-shadow: 0 -8px 34px rgba(0,0,0,.16); padding-bottom: calc(0.75rem + env(safe-area-inset-bottom));"
 			transition:fly={{ y: 420, duration: 320, easing: quintOut }}
 			onclick={(e) => e.stopPropagation()}
 			role="presentation"
 		>
 			<div
-				class="mx-auto mb-2 h-1.25 w-9 shrink-0 rounded-full"
+				class="mx-auto mb-3 h-1 w-9 shrink-0 rounded-full"
 				style="background: var(--color-border);"
 			></div>
 
-			<div class="relative flex shrink-0 items-center justify-center pt-1 pb-3">
+			<div class="min-h-0 flex-1 overflow-y-auto">
+				<!-- What you shared. Its own words stay secondary to yours: the
+				     caption box below is the serif one, because the note is your
+				     thought and not the article's headline. -->
+				{#if sharedImageLoading}
+					<div
+						class="mb-3 flex h-28 items-center justify-center rounded-[16px]"
+						style="background: var(--color-surface-2);"
+					>
+						<div
+							class="h-5 w-5 animate-spin rounded-full border-2"
+							style="border-color: var(--color-border); border-top-color: var(--color-accent);"
+						></div>
+					</div>
+				{:else if sharedImageDataUrl}
+					<img
+						src={sharedImageDataUrl}
+						alt=""
+						class="mb-3 max-h-44 w-full rounded-[16px] object-cover"
+						style="background: var(--color-surface-2);"
+					/>
+				{/if}
+
+				{#if !sharedImageDataUrl || sourceUrl}
+					<div
+						class="mb-3 flex items-start gap-3 rounded-[16px] p-2.5"
+						style="background: var(--color-surface-2);"
+					>
+						{#if fetchedImage}
+							<img
+								src={fetchedImage}
+								alt=""
+								class="h-[52px] w-[52px] shrink-0 rounded-[13px] object-cover"
+								style="background: var(--color-surface);"
+							/>
+						{/if}
+						<div class="min-w-0 flex-1">
+							{#if sourceUrl}
+								<p
+									class="mb-0.5 truncate text-[0.68rem] font-extrabold tracking-[0.04em] uppercase"
+									style="color: var(--color-ink-faint);"
+								>
+									{hostname(sourceUrl)}
+								</p>
+							{/if}
+							<p class="line-clamp-2 text-[0.88rem] leading-[1.3] font-semibold tracking-[-0.01em]">
+								{displayTitle}
+							</p>
+							{#if displaySubtext}
+								<p
+									class="mt-0.5 line-clamp-1 text-[0.78rem]"
+									style="color: var(--color-ink-muted);"
+								>
+									{displaySubtext}
+								</p>
+							{:else if previewLoading}
+								<div
+									class="mt-1.5 h-2 w-2/3 animate-pulse rounded-full"
+									style="background: var(--color-surface);"
+								></div>
+							{/if}
+						</div>
+					</div>
+				{/if}
+
+				{#if sharedImageTooLarge}
+					<p class="mb-2 text-[0.78rem]" style="color: var(--color-danger);">
+						That image is too large to attach right now — saving the text only.
+					</p>
+				{/if}
+
+				<textarea
+					bind:this={captionEl}
+					bind:value={caption}
+					placeholder="Add a thought…"
+					rows="2"
+					class="mb-3 w-full resize-none bg-transparent font-serif text-[1.06rem] leading-[1.44] tracking-[-0.017em] outline-none"
+				></textarea>
+			</div>
+
+			<!-- Where it goes, then what it's about — the composer's order. -->
+			{#if continuation.target}
+				<div
+					class="mb-2.5 flex shrink-0 items-center gap-2 rounded-[14px] py-1.5 pr-1.5 pl-2.5"
+					style="background: var(--color-accent-soft);"
+				>
+					<span class="shrink-0 text-[0.85rem] leading-none" style="color: var(--color-accent);"
+						>&#8627;</span
+					>
+					{#if continuation.target.image}
+						<img
+							src={continuation.target.image}
+							alt=""
+							class="h-7 w-7 shrink-0 rounded-[8px] object-cover"
+							style="background: var(--color-surface-2);"
+						/>
+					{/if}
+					<span
+						class="min-w-0 flex-1 truncate text-[0.8rem] font-bold tracking-[-0.015em]"
+						style="color: var(--color-accent);"
+					>
+						{continuation.target.label}
+					</span>
+					<button
+						type="button"
+						aria-label="Save on its own instead"
+						class="grid h-6 w-6 shrink-0 place-items-center rounded-full text-[0.68rem] active:scale-90"
+						style="background: color-mix(in srgb, var(--color-accent) 16%, transparent); color: var(--color-accent);"
+						onclick={detach}
+					>
+						&#10005;
+					</button>
+				</div>
+			{:else if recentThreads.length > 0}
+				<ThreadStrip threads={recentThreads} onSelect={attach} />
+			{/if}
+
+			<div class="mb-3 shrink-0">
+				<TagPicker bind:selected recent={recentTags} onpick={() => captionEl?.focus()} />
+			</div>
+
+			<!-- Dismissing sits at the far left, a whole button away from Save:
+			     they're both one tap, and only one of them is recoverable. -->
+			<div class="flex shrink-0 items-center gap-2">
 				<button
+					type="button"
+					aria-label="Cancel"
+					disabled={submitted}
+					class="grid h-[2.875rem] w-[2.875rem] shrink-0 place-items-center rounded-full disabled:opacity-40"
+					style="background: var(--color-surface-2); color: var(--color-ink-2);"
 					onclick={() => leave()}
-					aria-label="Close"
-					class="absolute left-0 flex h-10 w-10 items-center justify-center rounded-[var(--radius-md)]"
-					style="background: var(--color-surface); color: var(--color-ink); box-shadow: 0 1px 2px rgba(0,0,0,0.06);"
 				>
 					<svg
-						width="16"
-						height="16"
+						width="17"
+						height="17"
 						viewBox="0 0 24 24"
 						fill="none"
 						stroke="currentColor"
@@ -225,203 +370,37 @@
 						stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg
 					>
 				</button>
-				<div class="text-center">
-					<p class="text-base font-bold">Quick capture</p>
-					<p class="text-xs" style="color: var(--color-ink-faint);">Shared to NoteMCP</p>
-				</div>
-			</div>
-
-			<div class="min-h-0 flex-1 overflow-y-auto pb-1">
-				{#if sharedImageLoading}
-					<div
-						class="mt-1 mb-4 flex h-32 items-center justify-center rounded-[var(--radius-lg)]"
-						style="background: var(--color-surface); border: 1px solid var(--color-border);"
-					>
-						<div
-							class="h-5 w-5 animate-spin rounded-full border-2"
-							style="border-color: var(--color-border); border-top-color: var(--color-accent);"
-						></div>
-					</div>
-				{:else}
-					<div
-						class="mt-1 mb-4 rounded-[var(--radius-lg)] p-4"
-						style="background: var(--color-surface); border: 1px solid var(--color-border);"
-					>
-						{#if !sharedImageDataUrl}
-							<div
-								class="mb-3 flex h-10 w-10 items-center justify-center rounded-[var(--radius-sm)]"
-								style="background: var(--color-accent-soft); color: var(--color-accent);"
-							>
-								<svg
-									width="17"
-									height="17"
-									viewBox="0 0 24 24"
-									fill="none"
-									stroke="currentColor"
-									stroke-width="2.2"
-									stroke-linecap="round"
-									stroke-linejoin="round"><path d="M7 17 17 7M8 7h9v9" /></svg
-								>
-							</div>
-							<p class="mb-3 text-xs" style="color: var(--color-ink-faint);">
-								{sourceUrl ? 'Shared link' : 'Text shared from another app'}
-							</p>
-						{/if}
-						{#if sharedImageDataUrl}
-							<img
-								src={sharedImageDataUrl}
-								alt=""
-								class="mb-3 max-h-48 w-full rounded-[var(--radius-md)] object-cover"
-								style="background: var(--color-surface-2);"
-							/>
-						{:else if sharedImageTooLarge}
-							<p class="mb-3 text-xs" style="color: var(--color-danger);">
-								Image is too large to attach right now — saving the text only.
-							</p>
-						{/if}
-						<div class="flex gap-3">
-							{#if fetchedImage && !sharedImageDataUrl}
-								<img
-									src={fetchedImage}
-									alt=""
-									class="h-14 w-14 shrink-0 rounded-[var(--radius-sm)] object-cover"
-									style="background: var(--color-surface-2);"
-								/>
-							{/if}
-							<div class="min-w-0 flex-1">
-								{#if sourceUrl}
-									<span
-										class="mb-1.5 inline-block rounded-full px-2 py-0.5 text-[0.7rem]"
-										style="background: var(--color-surface-2); color: var(--color-ink-muted);"
-									>
-										{hostname(sourceUrl)}
-									</span>
-								{/if}
-								<p
-									class="line-clamp-3 leading-snug"
-									style={sourceUrl || sharedImageDataUrl
-										? 'font-size: 0.95rem; font-weight: 500;'
-										: "font-family: Georgia, 'Times New Roman', serif; font-size: 1.5rem; font-weight: 400;"}
-								>
-									{displayTitle}
-								</p>
-								{#if displaySubtext}
-									<p class="mt-1 line-clamp-2 text-sm" style="color: var(--color-ink-muted);">
-										{displaySubtext}
-									</p>
-								{:else if previewLoading}
-									<div
-										class="mt-1.5 h-2.5 w-2/3 animate-pulse rounded-full"
-										style="background: var(--color-surface-2);"
-									></div>
-								{/if}
-							</div>
-						</div>
-					</div>
-				{/if}
-
-				<textarea
-					bind:value={caption}
-					placeholder="Add a thought…"
-					rows="2"
-					class="w-full resize-none rounded-[var(--radius-lg)] px-4 py-3.5 text-[0.95rem] outline-none"
-					style="background: var(--color-surface); border: 1px solid var(--color-border); color: var(--color-ink);"
-				></textarea>
-			</div>
-
-			<div class="shrink-0 pb-4">
-				{#if continuation.target}
-					<div
-						class="mb-3 flex items-center gap-2 rounded-[var(--radius-lg)] py-2 pr-2 pl-3"
-						style="background: var(--color-accent-soft);"
-					>
-						<span class="shrink-0 text-sm leading-none" style="color: var(--color-accent);"
-							>&#8627;</span
-						>
-						<span
-							class="min-w-0 flex-1 truncate text-[0.8rem] font-bold"
-							style="color: var(--color-accent);"
-						>
-							{continuation.target.label}
-						</span>
-						<button
-							type="button"
-							aria-label="Save on its own instead"
-							class="grid h-6 w-6 shrink-0 place-items-center rounded-full text-[0.68rem]"
-							style="background: color-mix(in srgb, var(--color-accent) 16%, transparent); color: var(--color-accent);"
-							onclick={detach}
-						>
-							&#10005;
-						</button>
-					</div>
-				{:else if recentThreads.length > 0}
-					<ThreadStrip threads={recentThreads} onSelect={attach} />
-				{/if}
-				<p
-					class="mb-2 text-xs font-medium tracking-wide uppercase"
-					style="color: var(--color-ink-faint);"
-				>
-					Save with a tag
-				</p>
-				<div class="grid grid-cols-3 gap-2.5">
-					{#each QUICK_TAGS as tag (tag)}
-						{@const done = submittedKey === tag}
-						<button
-							onclick={() => saveWith([tag], tag)}
-							disabled={submitted}
-							class="flex aspect-square flex-col items-start justify-between rounded-[var(--radius-lg)] p-3 text-left text-sm font-semibold disabled:opacity-100"
-							style={done
-								? 'background: var(--color-success-soft); color: var(--color-success);'
-								: `background: var(--color-surface); border: 1px solid var(--color-border); color: var(--color-ink); ${submitted ? 'opacity: 0.4;' : ''}`}
-						>
-							{#if done}
-								<svg
-									width="22"
-									height="22"
-									viewBox="0 0 24 24"
-									fill="none"
-									stroke="currentColor"
-									stroke-width="2.6"
-									stroke-linecap="round"
-									stroke-linejoin="round"><path d="M20 6 9 17l-5-5" /></svg
-								>
-							{:else}
-								<span class="text-lg font-bold" style="color: var(--color-accent);">#</span>
-								<span>{tag}</span>
-							{/if}
-						</button>
-					{/each}
-					<button
-						onclick={openInEditor}
-						disabled={submitted}
-						class="flex aspect-square flex-col items-start justify-between rounded-[var(--radius-lg)] p-3 text-left text-sm font-semibold"
-						style="background: var(--color-ink); color: var(--color-bg); {submitted
-							? 'opacity: 0.4;'
-							: ''}"
-					>
-						<svg
-							width="18"
-							height="18"
-							viewBox="0 0 24 24"
-							fill="none"
-							stroke="currentColor"
-							stroke-width="2.2"
-							stroke-linecap="round"
-							stroke-linejoin="round"><path d="M7 17 17 7M8 7h9v9" /></svg
-						>
-						Open
-					</button>
-				</div>
 
 				<button
-					onclick={() => saveWith([], 'inbox')}
+					type="button"
+					aria-label="Open in the editor"
 					disabled={submitted}
-					class="mt-3 flex w-full items-center justify-center gap-1.5 rounded-[var(--radius-md)] py-4 text-base font-semibold"
-					style={submittedKey === 'inbox'
-						? 'background: var(--color-success-soft); color: var(--color-success);'
-						: `background: var(--color-accent); color: var(--color-accent-ink); ${submitted ? 'opacity: 0.4;' : ''}`}
+					class="grid h-[2.875rem] w-[2.875rem] shrink-0 place-items-center rounded-full disabled:opacity-40"
+					style="background: var(--color-surface-2); color: var(--color-ink-2);"
+					onclick={openInEditor}
 				>
-					{#if submittedKey === 'inbox'}
+					<svg
+						width="17"
+						height="17"
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="2.2"
+						stroke-linecap="round"
+						stroke-linejoin="round"><path d="M7 17 17 7M8 7h9v9" /></svg
+					>
+				</button>
+
+				<button
+					type="button"
+					disabled={submitted}
+					class="flex h-[2.875rem] flex-1 items-center justify-center gap-2 rounded-full text-[1rem] font-bold tracking-[-0.015em] active:scale-[0.98]"
+					style={saved
+						? 'background: var(--color-success-soft); color: var(--color-success);'
+						: 'background: var(--color-accent); color: var(--color-accent-ink); box-shadow: 0 8px 20px rgba(20,80,58,.24);'}
+					onclick={save}
+				>
+					{#if saved}
 						<svg
 							width="18"
 							height="18"
@@ -434,7 +413,7 @@
 						>
 						Saved
 					{:else}
-						Just save<span class="text-sm font-normal opacity-80">to Inbox</span>
+						Save
 					{/if}
 				</button>
 			</div>

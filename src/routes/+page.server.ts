@@ -6,17 +6,6 @@ const NOTE_SELECT = '*, note_tags(tags(id, name))';
 
 export type TagCount = Tag & { count: number };
 
-/** Tags ordered by how recently they were used — that's what "recent" means
- *  in the composer, and it's free to derive from notes we already loaded. */
-function recentTagsFrom(notes: Note[]): Tag[] {
-	const seen = new Map<string, Tag>();
-	for (const note of notes) {
-		for (const tag of note.tags) if (!seen.has(tag.id)) seen.set(tag.id, tag);
-		if (seen.size >= 12) break;
-	}
-	return [...seen.values()].slice(0, 8);
-}
-
 /*
  * Note: this load deliberately never touches `url`. The stream's tag filter
  * lives in the query string (/?tag=blog), and because nothing here reads it,
@@ -63,5 +52,7 @@ export const load: PageServerLoad = async ({ locals: { supabase, user } }) => {
 	// the stream is a list of threads rather than a list of fragments.
 	const threads = attachChildren(notes);
 
-	return { notes: threads, recentTags: recentTagsFrom(notes), allTags, ok: !notesResult.error };
+	// `recentTags` comes from the root layout, so every capture surface offers
+	// the same row rather than each page deriving its own.
+	return { notes: threads, allTags, ok: !notesResult.error };
 };

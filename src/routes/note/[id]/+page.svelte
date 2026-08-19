@@ -13,5 +13,5 @@
 </svelte:head>
 
 {#key data.note.id}
-	<NoteEditor existingNote={data.note} thoughts={data.thoughts} parent={data.parent} />
+	<NoteEditor existingNote={data.note} thread={data.thread} />
 {/key}
