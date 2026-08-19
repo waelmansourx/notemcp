@@ -6,6 +6,7 @@
 	import { hostname, timeOfDay } from '$lib/dates';
 	import { clearDraft, isNewerThan, pruneDrafts, readDraft, saveDraft } from '$lib/draft.svelte';
 	import { stubOf } from '$lib/thread';
+	import { addPending, settlePending } from '$lib/stream.svelte';
 	import { writeInto } from '$lib/composer.svelte';
 	import Thought from './Thought.svelte';
 	import type { Note } from '$lib/types';
@@ -249,6 +250,9 @@
 				// until the server gave us a real one.
 				clearDraft(clientId);
 				id = note.id;
+				// If we already handed this note to the stream on the way out,
+				// give that copy the real id so it stops reading as unsynced.
+				settlePending(clientId, note.id);
 				history.replaceState(history.state, '', `/note/${id}`);
 			} else {
 				const body: Record<string, unknown> = {};
@@ -359,9 +363,30 @@
 
 	/** Going back shouldn't cost you the sentence you were in the middle of —
 	 *  but it shouldn't wait on the network either. The request outlives this
-	 *  component, and the local draft covers it if it doesn't. */
+	 *  component, and the local draft covers it if it doesn't.
+	 *
+	 *  A note being written for the first time also goes into the stream's
+	 *  pending list on the way out: the POST is still in flight, so the load
+	 *  we're navigating to would come back without it and the note would
+	 *  appear to have gone nowhere for a round trip or two. */
 	function leaveEditor() {
+		const unsent = !id && (title.trim() || content.trim());
 		persist();
+		if (unsent) {
+			addPending({
+				client_id: clientId,
+				title,
+				content_markdown: content,
+				source_url: sourceUrl,
+				source_type: sourceUrl ? 'share' : 'manual',
+				source_title: linkTitle,
+				source_description: linkDescription,
+				source_image: linkImage,
+				parent_id: null,
+				tagNames: tags.map((t) => t.name),
+				queued_at: new Date().toISOString()
+			});
+		}
 		goto('/');
 	}
 

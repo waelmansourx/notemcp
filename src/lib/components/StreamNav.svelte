@@ -1,10 +1,20 @@
 <script lang="ts">
 	import { page } from '$app/state';
+	import { goto } from '$app/navigation';
+	import { openFilter } from '$lib/filter.svelte';
 
 	let { subtitle = '' }: { subtitle?: string } = $props();
 
 	let onTags = $derived(page.url.pathname.startsWith('/tags'));
 	let title = $derived(onTags ? 'Tags' : 'Thoughts');
+
+	/* On a phone this button lives next to the write bar, where your thumb
+	   is. That bar is gone at desktop widths — the composer is a panel — so
+	   search moves to the masthead, which is where a pointer looks for it. */
+	function search() {
+		openFilter();
+		if (page.url.pathname !== '/') goto('/');
+	}
 </script>
 
 <!--
@@ -29,6 +39,23 @@
 				</p>
 			{/if}
 		</div>
+
+		<button
+			type="button"
+			aria-label="Search and filter"
+			class="hidden h-[42px] w-[42px] shrink-0 place-items-center rounded-full active:scale-95 lg:grid"
+			style="background: var(--color-surface-2); color: var(--color-ink-2);"
+			onclick={search}
+		>
+			<svg
+				width="19"
+				height="19"
+				viewBox="0 0 24 24"
+				fill="none"
+				stroke="currentColor"
+				stroke-width="2.2"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg
+			>
+		</button>
 
 		<a
 			href="/account"

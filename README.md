@@ -43,4 +43,6 @@ bun install
 bun run dev
 ```
 
-The schema (`notes`, `tags`, `note_tags`, all RLS-scoped to `auth.uid()`) is already applied to the Supabase project via migration — see the Supabase dashboard for the project named `notemcp`.
+The schema (`notes`, `tags`, `note_tags`, all RLS-scoped to `auth.uid()`, plus the
+`mcp_*` functions the MCP endpoint is built from) lives in `supabase/migrations/`
+and is applied to the Supabase project named `notemcp`.

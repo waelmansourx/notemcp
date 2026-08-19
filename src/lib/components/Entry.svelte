@@ -5,6 +5,7 @@
 	import { isPending } from '$lib/stream.svelte';
 	import { lastActivity, stubOf } from '$lib/thread';
 	import { writeInto } from '$lib/composer.svelte';
+	import { keepSelection } from '$lib/selection';
 	import TagChip from './TagChip.svelte';
 	import Thought from './Thought.svelte';
 
@@ -41,6 +42,7 @@
 <div class="entry py-[19px]" style={queued ? 'opacity: 0.5;' : ''} aria-busy={queued || undefined}>
 	<a
 		href={queued ? undefined : `/note/${note.id}`}
+		onclick={keepSelection}
 		class="block active:opacity-65"
 		aria-label={heading || firstLine(note.content_markdown) || 'Note'}
 	>

@@ -93,7 +93,9 @@
 					<div class="min-w-0">
 						<p class="truncate text-sm font-medium">{t.name}</p>
 						<p class="text-xs" style="color: var(--color-ink-faint);">
-							{t.last_used_at ? `Last used ${new Date(t.last_used_at).toLocaleDateString()}` : 'Never used'}
+							{t.last_used_at
+								? `Last used ${new Date(t.last_used_at).toLocaleDateString()}`
+								: 'Never used'}
 						</p>
 					</div>
 					<form method="POST" action="?/revokeToken" use:enhance>
@@ -158,7 +160,10 @@
 		</button>
 	</form>
 
-	<details class="mb-10 rounded-[var(--radius-md)] px-4 py-3" style="background: var(--color-surface-2);">
+	<details
+		class="mb-10 rounded-[var(--radius-md)] px-4 py-3"
+		style="background: var(--color-surface-2);"
+	>
 		<summary class="cursor-pointer text-sm font-medium">How to connect</summary>
 		<div class="mt-3 flex flex-col gap-3 text-xs" style="color: var(--color-ink-muted);">
 			<p>MCP endpoint:</p>
@@ -170,8 +175,7 @@
 			<code
 				class="block overflow-x-auto rounded-[var(--radius-sm)] px-2.5 py-2 whitespace-pre"
 				style="background: var(--color-surface); font-family: var(--font-mono);"
-				>claude mcp add --transport http notemcp {data.mcpUrl} \
-  --header "Authorization: Bearer YOUR_TOKEN"</code
+				>claude mcp add --transport http notemcp {data.mcpUrl} \ --header "Authorization: Bearer YOUR_TOKEN"</code
 			>
 		</div>
 	</details>

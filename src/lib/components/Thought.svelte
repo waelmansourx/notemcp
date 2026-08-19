@@ -3,6 +3,7 @@
 	import { timeOfDay, hostname } from '$lib/dates';
 	import { excerpt, extractLeadingImage } from '$lib/markdown';
 	import TagChip from './TagChip.svelte';
+	import { keepSelection } from '$lib/selection';
 
 	let {
 		note,
@@ -34,6 +35,8 @@
 <svelte:element
 	this={href ? 'a' : 'div'}
 	href={href ?? undefined}
+	role={href ? 'link' : undefined}
+	onclick={href ? keepSelection : undefined}
 	class="block {href ? 'active:opacity-65' : ''}"
 >
 	<p class="text-[0.72rem] font-bold tabular-nums" style="color: var(--color-ink-faint);">

@@ -45,6 +45,19 @@ export function addPending(entry: OutboxEntry) {
 	pending.items = [asNote(entry), ...pending.items];
 }
 
+/**
+ * The server has this one now.
+ *
+ * Swapping in the real id is what takes the note out of its "still syncing"
+ * look — full opacity, openable — the moment the POST comes back, instead of
+ * at the end of the stream refetch that follows it. The local copy stays in
+ * the list until that refetch lands, so nothing blinks; `withPending` drops it
+ * by `client_id` once the server's version is in the loaded data.
+ */
+export function settlePending(clientId: string, id: string) {
+	pending.items = pending.items.map((n) => (n.client_id === clientId ? { ...n, id } : n));
+}
+
 export function removePending(clientId: string) {
 	pending.items = pending.items.filter((n) => n.client_id !== clientId);
 }

@@ -81,6 +81,8 @@
 
 <svelte:head><title>NoteMCP</title></svelte:head>
 
+<!-- pb-36 clears the composer docked at the bottom of the column — the
+     phone's collapsed write bar below `lg`, the always-open dock above it. -->
 <div class="safe-top mx-auto min-h-screen max-w-2xl pb-36">
 	<StreamNav {subtitle} />
 

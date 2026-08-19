@@ -6,9 +6,8 @@
 	import { normalizeTagName } from '$lib/tags';
 	import { queueNote, syncEntryNow } from '$lib/outbox';
 	import { addPending, removePending } from '$lib/stream.svelte';
-	import { continuation, attach, detach, restore, touch } from '$lib/composer.svelte';
-	import ThreadStrip from '$lib/components/ThreadStrip.svelte';
-	import { QUICK_TAGS, type Tag, type ThreadStub } from '$lib/types';
+	import { continuation, detach, restore, touch } from '$lib/composer.svelte';
+	import { QUICK_TAGS, type Tag } from '$lib/types';
 	import { fly, fade } from 'svelte/transition';
 	import { quintOut } from 'svelte/easing';
 
@@ -58,15 +57,10 @@
 	onMount(restore);
 
 	// Sharing from another app is a capture surface in its own right, not a
-	// fallback for the in-app composer — so it gets the same offer to continue
-	// an earlier thread, and the same row of your own tags, instead of only
-	// inheriting a thread by luck of the 30-minute sticky window and choosing
-	// between five hard-coded tags.
-	let recentThreads = $derived(
-		((page.data.recentThreads ?? []) as ThreadStub[]).filter(
-			(t) => t.id !== continuation.target?.id
-		)
-	);
+	// fallback for the in-app composer — so it gets the same row of your own
+	// tags instead of five hard-coded ones. Like the composer, it no longer
+	// offers a thread to file under before you've written anything: the chip
+	// below only shows a thread you already chose from the note itself.
 	// Your own tags first, topped up from the defaults so the grid is always
 	// full — six is what fits two rows without the sheet growing a scroll.
 	let recentTags = $derived((page.data.recentTags ?? []) as Tag[]);
@@ -349,8 +343,6 @@
 						&#10005;
 					</button>
 				</div>
-			{:else if recentThreads.length > 0}
-				<ThreadStrip threads={recentThreads} onSelect={attach} />
 			{/if}
 
 			<!--
