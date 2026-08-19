@@ -6,7 +6,9 @@
 	import { QUICK_TAGS } from '$lib/types';
 	import { queueNote, syncEntryNow } from '$lib/outbox';
 	import { addPending, removePending } from '$lib/stream.svelte';
-	import { continuation, detach, restore, touch } from '$lib/composer.svelte';
+	import { continuation, attach, detach, restore, touch } from '$lib/composer.svelte';
+	import ThreadStrip from '$lib/components/ThreadStrip.svelte';
+	import type { ThreadStub } from '$lib/types';
 	import { fly, fade } from 'svelte/transition';
 	import { quintOut } from 'svelte/easing';
 
@@ -54,6 +56,12 @@
 	// point. It's never silent: the chip below the preview says where this is
 	// going and gets you out of it in one tap.
 	onMount(restore);
+
+	// Sharing from another app is a capture path in its own right, not a
+	// fallback for the in-app composer — so it gets the same offer to
+	// continue an earlier thread instead of only inheriting one by luck of
+	// the 30-minute sticky window.
+	let recentThreads = $derived((page.data.recentThreads ?? []) as ThreadStub[]);
 
 	onMount(() => {
 		if (sourceUrl) {
@@ -346,6 +354,8 @@
 							&#10005;
 						</button>
 					</div>
+				{:else if recentThreads.length > 0}
+					<ThreadStrip threads={recentThreads} onSelect={attach} />
 				{/if}
 				<p
 					class="mb-2 text-xs font-medium tracking-wide uppercase"

@@ -7,6 +7,7 @@
 	import { addPending, removePending } from '$lib/stream.svelte';
 	import { normalizeTagName } from '$lib/tags';
 	import { continuation, attach, detach, touch, restore } from '$lib/composer.svelte';
+	import ThreadStrip from './ThreadStrip.svelte';
 	import type { Tag, ThreadStub } from '$lib/types';
 	import { onMount } from 'svelte';
 	import { fly, fade, scale } from 'svelte/transition';
@@ -608,45 +609,7 @@
 				</button>
 			</div>
 		{:else if recentThreads.length > 0}
-			<div class="mb-2.5 flex shrink-0 items-center gap-2">
-				<span
-					class="shrink-0 text-[0.62rem] font-extrabold tracking-[0.13em] uppercase"
-					style="color: var(--color-ink-faint);">Continue</span
-				>
-				<div
-					class="flex min-w-0 flex-1 items-stretch gap-1.5 overflow-x-auto"
-					style="scrollbar-width: none;"
-				>
-					{#each recentThreads as thread (thread.id)}
-						<button
-							type="button"
-							class="flex w-[148px] shrink-0 items-center gap-2 rounded-[12px] p-1.5 text-left active:scale-[0.97]"
-							style="background: var(--color-surface-2);"
-							onclick={() => attach(thread)}
-						>
-							{#if thread.image}
-								<img
-									src={thread.image}
-									alt=""
-									loading="lazy"
-									class="h-7 w-7 shrink-0 rounded-[8px] object-cover"
-									style="background: var(--color-bg);"
-								/>
-							{:else}
-								<span
-									class="grid h-7 w-7 shrink-0 place-items-center rounded-[8px] text-[0.68rem] font-extrabold"
-									style="background: var(--color-accent-soft); color: var(--color-accent);"
-									aria-hidden="true">{thread.label.slice(0, 1).toUpperCase()}</span
-								>
-							{/if}
-							<span
-								class="line-clamp-2 min-w-0 flex-1 text-[0.71rem] leading-[1.22] font-semibold tracking-[-0.01em]"
-								>{thread.label}</span
-							>
-						</button>
-					{/each}
-				</div>
-			</div>
+			<ThreadStrip threads={recentThreads} onSelect={attach} />
 		{/if}
 
 		<!-- Tags sit above the text. "+ Tag" is pinned first so it's always
