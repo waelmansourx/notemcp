@@ -53,6 +53,82 @@ const NOTE_SHAPE =
 	'`label` names the note even when it has no title — use it when showing a note to a human. ' +
 	'`updated_at` is what you pass back as `if_updated_at` when you write.';
 
+const NOTE_OUTPUT_SCHEMA = {
+	type: 'object',
+	properties: {
+		id: { type: ['string', 'null'], description: 'Note UUID.' },
+		label: { type: ['string', 'null'], description: 'Human-readable note identity.' },
+		user_text: {
+			type: ['string', 'null'],
+			description: 'Only text deliberately authored by the user.'
+		},
+		tags: { type: 'array', items: { type: 'string' } },
+		source: {
+			anyOf: [
+				{ type: 'null' },
+				{
+					type: 'object',
+					properties: {
+						type: { type: ['string', 'null'] },
+						domain: { type: ['string', 'null'] },
+						title: { type: ['string', 'null'] },
+						url: { type: ['string', 'null'] },
+						image_available: { type: 'boolean' },
+						description: { type: ['string', 'null'] }
+					},
+					required: ['type', 'domain', 'title', 'url', 'image_available']
+				}
+			]
+		},
+		root_id: { type: ['string', 'null'], description: 'Thread root UUID.' },
+		parent_id: { type: ['string', 'null'], description: 'Parent note UUID for a continuation.' },
+		is_thread_head: { type: 'boolean' },
+		thread_count: { type: 'number' },
+		updated_at: { type: ['string', 'null'], format: 'date-time' }
+	},
+	required: [
+		'id',
+		'label',
+		'user_text',
+		'tags',
+		'source',
+		'root_id',
+		'parent_id',
+		'is_thread_head',
+		'thread_count',
+		'updated_at'
+	],
+	additionalProperties: true
+} as const;
+
+const NOTES_OUTPUT_SCHEMA = {
+	type: 'object',
+	properties: {
+		notes: { type: 'array', items: NOTE_OUTPUT_SCHEMA },
+		error: { type: 'string' }
+	},
+	anyOf: [{ required: ['notes'] }, { required: ['error'] }],
+	additionalProperties: false
+} as const;
+
+const TAGS_OUTPUT_SCHEMA = {
+	type: 'object',
+	properties: {
+		tags: {
+			type: 'array',
+			items: {
+				type: 'object',
+				properties: { name: { type: 'string' }, count: { type: 'number' } },
+				required: ['name', 'count'],
+				additionalProperties: false
+			}
+		},
+		error: { type: 'string' }
+	},
+	anyOf: [{ required: ['tags'] }, { required: ['error'] }],
+	additionalProperties: false
+} as const;
+
 const TOOLS = [
 	{
 		name: 'search_notes',
@@ -138,7 +214,8 @@ const TOOLS = [
 					description: 'Include each note’s body. Default false — leave it off for wide searches.'
 				}
 			}
-		}
+		},
+		outputSchema: NOTES_OUTPUT_SCHEMA
 	},
 	{
 		name: 'get_note_asset',
@@ -195,7 +272,8 @@ const TOOLS = [
 				},
 				full: { type: 'boolean', description: 'Include note bodies. Default false.' }
 			}
-		}
+		},
+		outputSchema: NOTES_OUTPUT_SCHEMA
 	},
 	{
 		name: 'get_note',
@@ -220,7 +298,8 @@ const TOOLS = [
 			'Every tag the user has, with how many live notes carry it. Read this before guessing a ' +
 			'tag name. Tags are paths: a "project/type" name like "notemcp/bug" is listed alongside ' +
 			'the broader "notemcp", and searching the broader one finds everything under it.',
-		inputSchema: { type: 'object', properties: {} }
+		inputSchema: { type: 'object', properties: {} },
+		outputSchema: TAGS_OUTPUT_SCHEMA
 	},
 	{
 		name: 'create_note',
@@ -597,7 +676,7 @@ export const POST: RequestHandler = async ({ request, locals: { supabase } }) =>
 		return rpcResult(id, {
 			protocolVersion: '2025-06-18',
 			capabilities: { tools: {} },
-			serverInfo: { name: 'notemcp', version: '0.3.0' }
+			serverInfo: { name: 'notemcp', version: '0.4.0' }
 		});
 	}
 
