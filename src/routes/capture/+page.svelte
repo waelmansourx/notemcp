@@ -8,7 +8,8 @@
 	import { addPending, removePending } from '$lib/stream.svelte';
 	import { continuation, detach, restore, touch } from '$lib/composer.svelte';
 	import { beginMediaUpload } from '$lib/media';
-	import { QUICK_TAGS, type Tag } from '$lib/types';
+	import { suggestions } from '$lib/cache.svelte';
+	import { QUICK_TAGS } from '$lib/types';
 	import { fly, fade } from 'svelte/transition';
 	import { quintOut } from 'svelte/easing';
 
@@ -72,7 +73,11 @@
 	// below only shows a thread you already chose from the note itself.
 	// Your own tags first, topped up from the defaults so the grid is always
 	// full — six is what fits two rows without the sheet growing a scroll.
-	let recentTags = $derived((page.data.recentTags ?? []) as Tag[]);
+	// Read from the local cache rather than `page.data`: the layout streams the
+	// row now, and the share sheet is the one surface that can't afford to wait
+	// for it — you're here for two seconds, and the tags have to be there on
+	// the first frame or you may as well not have them.
+	let recentTags = $derived(suggestions.recent);
 	let quickTags = $derived.by(() => {
 		const names: string[] = [];
 		for (const name of [...recentTags.map((t) => t.name), ...QUICK_TAGS]) {
@@ -470,7 +475,7 @@
 				<button
 					type="button"
 					disabled={submitted}
-					class="flex h-[2.875rem] flex-1 items-center justify-center gap-1.5 rounded-full text-[1rem] font-bold tracking-[-0.015em] active:scale-[0.98]"
+					class="flex h-[2.875rem] flex-1 items-center justify-center gap-1.5 rounded-full text-[1rem] font-bold tracking-[-0.015em] active:scale-[0.98] disabled:opacity-40"
 					style={savedTag === 'inbox'
 						? 'background: var(--color-success-soft); color: var(--color-success);'
 						: 'background: var(--color-accent); color: var(--color-accent-ink); box-shadow: 0 8px 20px rgba(20,80,58,.24);'}

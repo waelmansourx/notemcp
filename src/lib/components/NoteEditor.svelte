@@ -6,7 +6,7 @@
 	import { hostname, timeOfDay } from '$lib/dates';
 	import { clearDraft, isNewerThan, pruneDrafts, readDraft, saveDraft } from '$lib/draft.svelte';
 	import { addPending, asNote, isPending, settlePending } from '$lib/stream.svelte';
-	import { queueNote, syncEntry } from '$lib/outbox';
+	import { queueNote, queueEdit, removeEdit, removeFromOutbox, syncEntry } from '$lib/outbox';
 	import { beginMediaUpload, type PendingMedia } from '$lib/media';
 	import { normalizeTagName } from '$lib/tags';
 	import { showToast } from '$lib/toast.svelte';
@@ -80,7 +80,7 @@
 	let editingTagIndex = $state<number | null>(null);
 	let editTagValue = $state('');
 	let tagError = $state('');
-	let saveState = $state<'idle' | 'saving' | 'saved'>('idle');
+	let saveState = $state<'idle' | 'saving' | 'saved' | 'queued'>('idle');
 	let deleting = $state(false);
 
 	let editor = $state<ReturnType<typeof MarkdownEditor> | null>(null);
@@ -141,9 +141,21 @@
 
 	type Snapshot = { title: string; content: string; pinned: boolean; tags: string };
 
+	// \u0000 can't appear in a tag name, so joining on it can't collide.
+	const TAG_SEP = '\u0000';
+
 	function snapshot(): Snapshot {
-		// \u0000 can't appear in a tag name, so joining on it can't collide.
-		return { title, content, pinned, tags: tags.map((t) => t.name).join('\u0000') };
+		return { title, content, pinned, tags: tags.map((t) => t.name).join(TAG_SEP) };
+	}
+
+	/** The same shape, read off a note as the server sent it. */
+	function snapshotOf(note: Note): Snapshot {
+		return {
+			title: note.title,
+			content: note.content_markdown,
+			pinned: note.pinned,
+			tags: note.tags.map((t) => t.name).join(TAG_SEP)
+		};
 	}
 
 	function same(a: Snapshot, b: Snapshot): boolean {
@@ -152,10 +164,30 @@
 		);
 	}
 
-	// Deliberately not $state: this is a record of what the server has, not
-	// something the UI renders, and keeping it out of the graph stops the
-	// autosave effect from re-running on its own result.
-	let saved: Snapshot | null = existingNote ? snapshot() : null;
+	/*
+	 * What the server last confirmed, for every thought in the thread — not
+	 * just the one the page happened to load with.
+	 *
+	 * `threadItems` holds what's on screen, which after an edit runs ahead of
+	 * the server; this holds what's actually stored. Keeping the two apart is
+	 * what lets a peer thought be edited at all. With only one copy, tapping
+	 * back into a thought you'd just changed either showed you the stale
+	 * server text — losing the edit, and re-sending the stale copy on your
+	 * next keystroke — or made the editor believe the server already had your
+	 * changes and never send them, depending on which of the two that single
+	 * copy was.
+	 *
+	 * Deliberately not $state: a record of the server, not something the UI
+	 * renders, and keeping it out of the graph stops the autosave effect from
+	 * re-running on its own result.
+	 */
+	const serverState = new Map<string, Snapshot>();
+	for (const item of thread) serverState.set(item.id, snapshotOf(item));
+	if (existingNote && !serverState.has(existingNote.id)) {
+		serverState.set(existingNote.id, snapshotOf(existingNote));
+	}
+
+	let saved: Snapshot | null = existingNote ? (serverState.get(existingNote.id) ?? null) : null;
 	// Stable for the life of this editor, so a note that hasn't been created
 	// yet still has somewhere consistent to keep its draft.
 	const clientId = crypto.randomUUID();
@@ -183,30 +215,103 @@
 		return () => clearTimeout(timer);
 	});
 
+	/**
+	 * Fold what's in the editor back into the thread list.
+	 *
+	 * `threadItems` is what the peer cards render from and what `switchTo`
+	 * reads when you tap back into a thought, so an edit that lived only in
+	 * the editor's own fields was reverted the moment you moved off it. This
+	 * is what keeps a thought you changed looking changed — before the
+	 * network has confirmed anything, and whether or not it ever does.
+	 */
+	/** A tag typed into the editor has no id until the server assigns one, but
+	 *  a Note's tags are typed as having one and the peer cards key on it.
+	 *  `local:` fills the gap and is stripped again on the way back out — a
+	 *  tag carrying one has never been stored, so it must not be mistaken for
+	 *  something `/api/tags/:id` could rename. */
+	const LOCAL_TAG = 'local:';
+
+	function editableTags(note: Note): { id: string | null; name: string }[] {
+		return note.tags.map((t) => ({
+			id: t.id?.startsWith(LOCAL_TAG) ? null : t.id,
+			name: t.name
+		}));
+	}
+
+	function commitToThread(
+		noteId: string | null,
+		values: { title: string; content: string; pinned: boolean; tags: { id: string | null; name: string }[] }
+	) {
+		if (!noteId) return;
+		threadItems = threadItems.map((n) =>
+			n.id === noteId
+				? {
+						...n,
+						title: values.title,
+						content_markdown: values.content,
+						pinned: values.pinned,
+						tags: values.tags.map((t) => ({ id: t.id ?? LOCAL_TAG + t.name, name: t.name }))
+					}
+				: n
+		);
+	}
+
 	/*
 	 * Recover anything a previous visit didn't manage to send — but exactly
 	 * once, on mount, and deliberately outside the reactive graph. An effect
 	 * that both reads the note's text and writes it re-runs on every keystroke,
 	 * and would race the autosave effect for the same localStorage key: one
 	 * writing the draft, the other deciding it was redundant and deleting it.
+	 *
+	 * Every thought in the thread is checked, not just the one the page loaded
+	 * with: an unsent edit to a peer is exactly as real as an unsent edit to
+	 * this one, and only looking at `existingNote` meant a thought you'd
+	 * changed offline came back showing the server's copy with no sign the
+	 * change had ever happened.
 	 */
 	onMount(() => {
 		pruneDrafts();
-		if (!existingNote) return;
 
-		const draft = readDraft(existingNote.id);
-		if (!draft) return;
+		const recovered = new Map<string, { title: string; content: string; tags: string[] }>();
+		for (const item of threadItems) {
+			const server = serverState.get(item.id);
+			if (!server) continue;
 
-		const stale = !isNewerThan(draft, existingNote.updated_at);
-		const redundant = draft.content === content && draft.title === title;
-		if (stale || redundant) {
-			clearDraft(existingNote.id);
-			return;
+			const draft = readDraft(item.id);
+			if (!draft) continue;
+
+			// Compared against the server's copy, never against what's on
+			// screen — by the time this runs the two can already differ.
+			const stale = !isNewerThan(draft, item.updated_at);
+			const redundant = draft.content === server.content && draft.title === server.title;
+			if (stale || redundant) {
+				clearDraft(item.id);
+				continue;
+			}
+			recovered.set(item.id, draft);
 		}
 
-		title = draft.title;
-		content = draft.content;
-		tags = draft.tags.map((name) => ({ id: null, name }));
+		if (recovered.size === 0) return;
+
+		// One pass, so the list isn't reassigned underneath its own iteration.
+		threadItems = threadItems.map((n) => {
+			const draft = recovered.get(n.id);
+			return draft
+				? {
+						...n,
+						title: draft.title,
+						content_markdown: draft.content,
+						tags: draft.tags.map((name) => ({ id: LOCAL_TAG + name, name }))
+					}
+				: n;
+		});
+
+		const mine = id ? recovered.get(id) : undefined;
+		if (mine) {
+			title = mine.title;
+			content = mine.content;
+			tags = mine.tags.map((name) => ({ id: null, name }));
+		}
 	});
 
 	// Leaving the page shouldn't cost you the last sentence you typed — on
@@ -243,6 +348,59 @@
 		// the network comes back.
 		const persistingId = id;
 		const persistingDraftKey = draftKey;
+		const persistingTags = tags.map((t) => ({ id: t.id, name: t.name }));
+		// The snapshot this write is measured against — `saved` belongs to
+		// whatever is on screen, which a mid-flight switch can change.
+		const base = saved;
+
+		// Built before the request so the failure paths can queue exactly what
+		// didn't make it, rather than guessing at it afterwards.
+		const patch: Record<string, unknown> = {};
+		if (persistingId) {
+			if (!base || base.title !== next.title) patch.title = next.title;
+			if (!base || base.content !== next.content) patch.content_markdown = next.content;
+			if (!base || base.pinned !== next.pinned) patch.pinned = next.pinned;
+			// Sending tagNames rewrites every note_tags row for this note, so
+			// it only goes out when the tags themselves have changed.
+			if (!base || base.tags !== next.tags) patch.tagNames = persistingTags.map((t) => t.name);
+		}
+
+		/** Is the thought this write was started for still the one on screen?
+		 *  A tap on a peer mid-request means the answer applies to a note the
+		 *  editor's fields no longer describe. */
+		function stillActive() {
+			return id === persistingId;
+		}
+		// Set once a successful create has handed its new id to the editor —
+		// after which `stillActive()` can no longer recognise itself.
+		let adopted = false;
+
+		/* Couldn't reach the server. The words are already in the draft, but a
+		   draft is only a crash mat — something has to actually send them, or
+		   "saved locally" quietly means "lost". Queue the write so the next app
+		   open retries it, exactly like a capture that was made offline. */
+		function queueForLater() {
+			if (persistingId) {
+				if (Object.keys(patch).length > 0) queueEdit(persistingId, patch);
+			} else {
+				// Same client id the POST used, so a retry resolves to the row
+				// the failed attempt may already have written.
+				queueNote({
+					client_id: clientId,
+					title: next.title,
+					content_markdown: next.content,
+					source_url: sourceUrl,
+					source_type: sourceUrl ? 'share' : 'manual',
+					source_title: linkTitle,
+					source_description: linkDescription,
+					source_image: linkImage,
+					parent_id: null,
+					tagNames: persistingTags.map((t) => t.name)
+				});
+			}
+			// Only speak for the thought actually on screen.
+			if (stillActive()) saveState = 'queued';
+		}
 
 		try {
 			if (!persistingId) {
@@ -259,65 +417,94 @@
 						source_description: linkDescription,
 						source_image: linkImage,
 						pinned: next.pinned,
-						tagNames: tags.map((t) => t.name)
+						tagNames: persistingTags.map((t) => t.name)
 					})
 				});
 				if (!res.ok) {
-					saveState = 'idle';
+					queueForLater();
 					return;
 				}
 				const note = await res.json();
 				// The draft moves with the note: it was filed under the client id
 				// until the server gave us a real one.
 				clearDraft(clientId);
+				// An earlier attempt may have queued this note; it's real now.
+				removeFromOutbox(clientId);
+				serverState.set(note.id, next);
 				// Only claim the new id if this is still the note on screen —
 				// switching away mid-request must not stamp its id onto
 				// whatever's active now.
-				if (id === persistingId) {
+				if (stillActive()) {
 					id = note.id;
 					history.replaceState(history.state, '', `/note/${id}`);
+					// Checked again below against the id we've just adopted, so
+					// this has to be recorded before it changes.
+					adopted = true;
 				}
 				// If we already handed this note to the stream on the way out,
 				// give that copy the real id so it stops reading as unsynced,
 				// regardless of what's on screen now.
 				settlePending(clientId, note.id);
 			} else {
-				const body: Record<string, unknown> = {};
-				if (!saved || saved.title !== next.title) body.title = next.title;
-				if (!saved || saved.content !== next.content) body.content_markdown = next.content;
-				if (!saved || saved.pinned !== next.pinned) body.pinned = next.pinned;
-				// Sending tagNames rewrites every note_tags row for this note, so
-				// it only goes out when the tags themselves have changed.
-				if (!saved || saved.tags !== next.tags) body.tagNames = tags.map((t) => t.name);
-
-				if (Object.keys(body).length > 0) {
+				// The PATCH answers with the whole note, tags included — which is
+				// where a tag typed here finally gets a real id.
+				let confirmed: Note | null = null;
+				if (Object.keys(patch).length > 0) {
 					const res = await fetch(`/api/notes/${persistingId}`, {
 						method: 'PATCH',
 						headers: { 'content-type': 'application/json' },
-						body: JSON.stringify(body)
+						body: JSON.stringify(patch)
 					});
 					if (!res.ok) {
-						saveState = 'idle';
+						queueForLater();
 						return;
 					}
+					confirmed = await res.json().catch(() => null);
 				}
+
+				const confirmedTags = confirmed?.tags?.map((t) => ({ id: t.id, name: t.name }));
+				// Only trust them if they're still the tags we sent — the user
+				// can have added one while the request was out.
+				const tagsUnchanged =
+					confirmedTags && confirmedTags.map((t) => t.name).join(TAG_SEP) === next.tags;
+
+				// The server is now here, whichever thought is on screen — so
+				// record it against the note this write was actually for, drop
+				// any earlier attempt still queued for it, and let go of the
+				// crash mat, which is no longer holding anything the server
+				// isn't. All keyed to the outgoing note, never to `id`.
+				serverState.set(persistingId, next);
+				removeEdit(persistingId);
+				clearDraft(persistingDraftKey);
+				commitToThread(persistingId, {
+					title: next.title,
+					content: next.content,
+					pinned: next.pinned,
+					tags: tagsUnchanged ? confirmedTags! : persistingTags
+				});
+				// Swapping the real ids in lets a tag that was just created be
+				// renamed without a reload. Safe against re-triggering autosave:
+				// the snapshot only compares names, which haven't moved.
+				if (stillActive() && tagsUnchanged) tags = confirmedTags!;
 			}
 
 			// Same guard as the id above: if a switch happened mid-request,
 			// `saved`/`title`/`content` now belong to a different thought, and
 			// stamping this response's snapshot over them would make the note
 			// actually on screen look saved when it isn't.
-			if (id === persistingId) {
+			if (adopted || stillActive()) {
 				saved = next;
-				// The server has it now, so the crash mat isn't holding anything
-				// the server isn't.
-				clearDraft(persistingDraftKey);
+				saveState = 'saved';
+			} else {
+				// The header describes whatever is on screen now, and this
+				// answer was about something else.
+				saveState = 'idle';
 			}
-			saveState = 'saved';
 		} catch {
-			// Offline or the request died. Leave `saved` alone so the next
-			// change (or the next visibility flush) tries again.
-			saveState = 'idle';
+			// Offline or the request died. `saved` is left alone so the next
+			// change still reads as unsent, and the write is queued so it
+			// doesn't depend on there being a next change.
+			queueForLater();
 		} finally {
 			inFlight = false;
 			if (queuedAgain) {
@@ -353,10 +540,12 @@
 			return;
 		}
 
-		// Flush whatever's mid-sentence on the thought we're leaving before its
-		// fields get overwritten. persist() reads `id` synchronously before its
-		// first await, so this is guaranteed to save the outgoing thought, not
-		// the one we're about to switch to.
+		// Hold on to what's in the editor before its fields get overwritten —
+		// both locally, so the card for the thought we're leaving shows what
+		// you actually typed, and on the wire. persist() reads `id`
+		// synchronously before its first await, so it's guaranteed to save the
+		// outgoing thought, not the one we're about to switch to.
+		commitToThread(id, { title, content, pinned, tags });
 		persist();
 
 		id = target.id;
@@ -367,8 +556,20 @@
 		linkDescription = target.source_description;
 		linkImage = target.source_image;
 		pinned = target.pinned;
-		tags = target.tags.map((t) => ({ id: t.id, name: t.name }));
-		saved = snapshot();
+		tags = editableTags(target);
+		/*
+		 * What the *server* has for this thought — never `snapshot()`, which
+		 * reads the fields we just loaded.
+		 *
+		 * Those fields come from `threadItems`, which carries local edits that
+		 * may not have gone out yet. Treating them as the saved state was the
+		 * bug that made editing a peer thought pointless: switch away, switch
+		 * back, and the editor concluded the server already had your changes,
+		 * so autosave had nothing to send and the edit was never written.
+		 * Falling back to null means "we don't know what's stored" — which
+		 * sends everything, the safe direction to be wrong in.
+		 */
+		saved = serverState.get(target.id) ?? null;
 
 		history.replaceState(history.state, '', `/note/${target.id}`);
 		queueMicrotask(() => {
@@ -397,6 +598,26 @@
 	let addPhotoTooLarge = $state(false);
 	let addBusy = $state(false);
 	const MAX_ADD_PHOTO_BYTES = 4 * 1024 * 1024;
+
+	// The same crash mat every other composer in this app gets: written to
+	// localStorage on every change, synchronously, so a backgrounded tab or a
+	// tap on Back doesn't cost you the continuation you were mid-sentence on.
+	// Keyed to the thread's root rather than whichever thought is open, since
+	// that's what a continuation always attaches to regardless (see
+	// addThought/buildAddContent below) — the same id whether you typed it
+	// looking at the first thought or the fifth.
+	const addDraftKey = `thread-add:${threadItems[0]?.id ?? existingNote?.id ?? clientId}`;
+
+	onMount(() => {
+		const draft = readDraft(addDraftKey);
+		if (draft?.content) addText = draft.content;
+	});
+
+	$effect(() => {
+		const content = addText;
+		if (!content.trim()) clearDraft(addDraftKey);
+		else saveDraft(addDraftKey, { title: '', content, tags: [] });
+	});
 
 	let addHasContent = $derived(addText.trim().length > 0 || Boolean(addPhotoDataUrl));
 
@@ -489,6 +710,7 @@
 		threadItems = [...threadItems, asNote(entry)];
 
 		addText = '';
+		clearDraft(addDraftKey);
 		clearAddPhoto();
 		addBusy = false;
 		queueMicrotask(() => addTextarea?.focus());
@@ -499,6 +721,14 @@
 				threadItems = threadItems.map((n) =>
 					n.client_id === entry.client_id ? { ...n, id: serverId } : n
 				);
+				// It's a real note now, so it can be tapped into and edited —
+				// which needs a record of what the server has for it.
+				serverState.set(serverId, {
+					title: entry.title,
+					content: entry.content_markdown,
+					pinned: false,
+					tags: entry.tagNames.join(TAG_SEP)
+				});
 			},
 			() => showToast('Saved on this device — will sync', { duration: 2600 })
 		);
@@ -573,30 +803,35 @@
 
 	/** Going back shouldn't cost you the sentence you were in the middle of —
 	 *  but it shouldn't wait on the network either. The request outlives this
-	 *  component, and the local draft covers it if it doesn't.
+	 *  component, and the outbox covers it if it doesn't.
 	 *
-	 *  A note being written for the first time also goes into the stream's
-	 *  pending list on the way out: the POST is still in flight, so the load
-	 *  we're navigating to would come back without it and the note would
-	 *  appear to have gone nowhere for a round trip or two. */
+	 *  A note being written for the first time is queued on the way out and
+	 *  also handed to the stream's pending list: queued because the POST is
+	 *  still in flight and closing the tab now would otherwise take the note
+	 *  with it, and pending because the load we're navigating to would come
+	 *  back without it and the note would appear to have gone nowhere for a
+	 *  round trip or two. persist() drops it from the queue once the server
+	 *  answers, and the client id is shared, so the two can't become two
+	 *  notes. */
 	function leaveEditor() {
 		const unsent = !id && (title.trim() || content.trim());
-		persist();
 		if (unsent) {
-			addPending({
-				client_id: clientId,
-				title,
-				content_markdown: content,
-				source_url: sourceUrl,
-				source_type: sourceUrl ? 'share' : 'manual',
-				source_title: linkTitle,
-				source_description: linkDescription,
-				source_image: linkImage,
-				parent_id: null,
-				tagNames: tags.map((t) => t.name),
-				queued_at: new Date().toISOString()
-			});
+			addPending(
+				queueNote({
+					client_id: clientId,
+					title,
+					content_markdown: content,
+					source_url: sourceUrl,
+					source_type: sourceUrl ? 'share' : 'manual',
+					source_title: linkTitle,
+					source_description: linkDescription,
+					source_image: linkImage,
+					parent_id: null,
+					tagNames: tags.map((t) => t.name)
+				})
+			);
 		}
+		persist();
 		goto('/');
 	}
 
@@ -634,8 +869,18 @@
 			>
 		</button>
 
+		<!-- "Saved on this device" is the honest version of what's happened when
+		     the network write didn't land: the words are on the disk and queued
+		     to sync, which is worth saying rather than showing nothing and
+		     letting it read as lost. -->
 		<span class="text-xs" style="color: var(--color-ink-faint);">
-			{saveState === 'saving' ? 'Saving…' : saveState === 'saved' ? 'Saved' : ''}
+			{saveState === 'saving'
+				? 'Saving…'
+				: saveState === 'saved'
+					? 'Saved'
+					: saveState === 'queued'
+						? 'Saved on this device'
+						: ''}
 		</span>
 
 		<div class="flex items-center gap-1">

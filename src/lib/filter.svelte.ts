@@ -1,5 +1,6 @@
 import type { Note } from './types';
 import { plainText } from './markdown';
+import { tagMatchesSearch } from './tags';
 
 /**
  * Filtering the stream.
@@ -51,11 +52,16 @@ export function matchesQuery(note: Note, q: string): boolean {
 }
 
 /** A note has to carry every active tag, not just one of them — narrowing is
- *  the point of picking a second tag. */
+ *  the point of picking a second tag.
+ *
+ *  A tag stands for any run of levels it names, in either direction:
+ *  `#notemcp` finds `#notemcp/bug/share` because it's the branch above it, and
+ *  `#bug` finds it too, because a type you use across projects should be one
+ *  filter rather than one per project. */
 export function matchesTags(note: Note, tags: string[]): boolean {
 	if (tags.length === 0) return true;
-	const own = new Set(note.tags.map((t) => t.name));
-	return tags.every((t) => own.has(t));
+	const own = note.tags.map((t) => t.name);
+	return tags.every((t) => own.some((name) => tagMatchesSearch(t, name)));
 }
 
 /** A thread matches if any thought in it does — the head, or anything added

@@ -1,23 +1,32 @@
 import type { PageServerLoad } from './$types';
 import type { Tag, ThreadStub } from '$lib/types';
-import { tagNamespace } from '$lib/tags';
+import { flattenTagTree, tagAncestors, tagTree } from '$lib/tags';
 
-export type TagGroup = {
-	tag: Tag;
+/**
+ * One row of the tag tree.
+ *
+ * A tag's card counts everything filed beneath it, not only what carries it
+ * exactly — `#notemcp` shows the thought you tagged `#notemcp/bug/share`,
+ * which is the same rule the stream filter uses. That's what makes a parent
+ * worth tapping, and what lets you tag one specific path without losing the
+ * broad view.
+ *
+ * Levels nothing was tagged with exactly still get a row (see tagTree), so
+ * `#notemcp` is a place even if every note went under `#notemcp/bug`.
+ */
+export type TagTreeGroup = {
+	/** The full path, and the tag's stored name. */
+	name: string;
+	/** Just this level, for a card sitting under its parent. */
+	leaf: string;
+	depth: number;
+	/** The real tag row's id where one exists, so keys stay stable; a
+	 *  synthesised parent falls back to its path. */
+	id: string;
 	count: number;
-	/** The most recent notes carrying this tag — enough to fill the card's
+	/** The most recent notes filed under this path — enough to fill the card's
 	 *  pages, not the whole tag. */
 	notes: ThreadStub[];
-};
-
-/** Tags sharing a namespace ("features/composer", "features/export") shown
- *  under one heading, instead of each repeating "features" in its own card.
- *  A tag with no `/` gets a section of its own, keyed by its full name, so
- *  every tag renders through the same list either way. */
-export type TagSection = {
-	namespace: string | null;
-	key: string;
-	groups: TagGroup[];
 };
 
 /** Three rows to a page, three pages: enough that a tag reads as a place with
@@ -58,7 +67,7 @@ export const load: PageServerLoad = async ({ locals: { supabase, user } }) => {
 	const { data: tagRows } = await supabase.from('tags').select('id, name').eq('user_id', user!.id);
 
 	const tags: Tag[] = tagRows ?? [];
-	if (tags.length === 0) return { sections: [] as TagSection[] };
+	if (tags.length === 0) return { nodes: [] as TagTreeGroup[] };
 
 	const { data: links } = await supabase
 		.from('note_tags')
@@ -69,7 +78,7 @@ export const load: PageServerLoad = async ({ locals: { supabase, user } }) => {
 		);
 
 	const noteIds = [...new Set((links ?? []).map((l: any) => l.note_id))];
-	if (noteIds.length === 0) return { sections: [] as TagSection[] };
+	if (noteIds.length === 0) return { nodes: [] as TagTreeGroup[] };
 
 	const { data: noteRows } = await supabase
 		.from('notes')
@@ -95,46 +104,45 @@ export const load: PageServerLoad = async ({ locals: { supabase, user } }) => {
 		rank.set(row.id, i);
 	});
 
-	const byTag = new Map<string, string[]>();
-	for (const link of links ?? []) {
-		if (!stubs.has(link.note_id)) continue;
-		const list = byTag.get(link.tag_id);
-		if (list) list.push(link.note_id);
-		else byTag.set(link.tag_id, [link.note_id]);
-	}
-
-	const groups: TagGroup[] = tags
-		.map((tag) => {
-			const ids = (byTag.get(tag.id) ?? []).sort(
-				(a, b) => (rank.get(a) ?? 1e9) - (rank.get(b) ?? 1e9)
-			);
-			return {
-				tag,
-				count: ids.length,
-				notes: ids.slice(0, PER_TAG).map((id) => stubs.get(id)!)
-			};
-		})
-		.filter((g) => g.count > 0)
-		// Most recently touched tag first: the thing you're in the middle of is
-		// the thing you're most likely to be looking for.
-		.sort((a, b) => (b.notes[0]?.at ?? '').localeCompare(a.notes[0]?.at ?? ''));
-
-	// Fold same-namespace tags under one heading, in the order their most
-	// recently touched member first appears — a namespace is as "hot" as
-	// whichever of its tags you reached for last.
-	const byNamespace = new Map<string, TagSection>();
-	const sections: TagSection[] = [];
-	for (const group of groups) {
-		const namespace = tagNamespace(group.tag.name);
-		const key = namespace ?? group.tag.name;
-		let section = byNamespace.get(key);
-		if (!section) {
-			section = { namespace, key, groups: [] };
-			byNamespace.set(key, section);
-			sections.push(section);
+	// A note files under every level of every tag it carries, so a parent's
+	// card is the union of its children's. Deduped per path: two tags under
+	// the same parent must not list the note twice.
+	const byPath = new Map<string, string[]>();
+	for (const [noteId, stub] of stubs) {
+		const paths = new Set<string>();
+		for (const tag of stub.tags) for (const path of tagAncestors(tag.name)) paths.add(path);
+		for (const path of paths) {
+			const list = byPath.get(path);
+			if (list) list.push(noteId);
+			else byPath.set(path, [noteId]);
 		}
-		section.groups.push(group);
 	}
 
-	return { sections };
+	const idByName = new Map(tags.map((t) => [t.name, t.id] as const));
+
+	// Most recently touched first: the thing you're in the middle of is the
+	// thing you're most likely to be looking for. Ordering the *names* this
+	// way before building the tree is what carries recency into it, since
+	// tagTree keeps whatever order it's given at every level.
+	const ordered = [...byPath.keys()].sort((a, b) => {
+		const an = byPath.get(a)!.reduce((m, id) => Math.min(m, rank.get(id) ?? 1e9), 1e9);
+		const bn = byPath.get(b)!.reduce((m, id) => Math.min(m, rank.get(id) ?? 1e9), 1e9);
+		return an - bn;
+	});
+
+	const nodes: TagTreeGroup[] = flattenTagTree(tagTree(ordered)).map((node) => {
+		const ids = (byPath.get(node.name) ?? []).sort(
+			(a, b) => (rank.get(a) ?? 1e9) - (rank.get(b) ?? 1e9)
+		);
+		return {
+			name: node.name,
+			leaf: node.leaf,
+			depth: node.depth,
+			id: idByName.get(node.name) ?? `path:${node.name}`,
+			count: ids.length,
+			notes: ids.slice(0, PER_TAG).map((id) => stubs.get(id)!)
+		};
+	});
+
+	return { nodes };
 };

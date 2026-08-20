@@ -58,7 +58,11 @@ const TOOLS = [
 				tags: {
 					type: 'array',
 					items: { type: 'string' },
-					description: 'Only notes carrying ALL of these tags. Case-insensitive, no leading #.'
+					description:
+						'Only notes carrying ALL of these tags. Case-insensitive, no leading #. ' +
+						'A tag also covers everything under it: "notemcp" matches a note tagged ' +
+						'"notemcp/bug/share", so filter by the broadest level that answers the question ' +
+						'and narrow only if you get too much back.'
 				},
 				limit: { type: 'number', description: 'Max results (default 20, max 100)' },
 				offset: { type: 'number', description: 'Skip this many results, for paging' },
@@ -123,7 +127,9 @@ const TOOLS = [
 	{
 		name: 'list_tags',
 		description:
-			"Every tag the user has, with how many live notes carry it. Read this before guessing a tag name.",
+			'Every tag the user has, with how many live notes carry it. Read this before guessing a ' +
+			'tag name. Tags are paths: a "project/type" name like "notemcp/bug" is listed alongside ' +
+			'the broader "notemcp", and searching the broader one finds everything under it.',
 		inputSchema: { type: 'object', properties: {} }
 	},
 	{

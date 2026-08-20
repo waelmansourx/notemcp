@@ -10,8 +10,10 @@
 		subtitle?: string;
 		/** While search is open, the title/subtitle/tabs would just be
 		 *  competing with the filter bar for the same strip of screen — so
-		 *  they drop out and only the account icon, which search doesn't
-		 *  replace, stays put. */
+		 *  they drop out. On a phone there's no room to spare even for the
+		 *  account icon's row, so the whole header steps aside; a desktop
+		 *  window can afford to keep that row, which is where the icon
+		 *  otherwise lives. */
 		minimal?: boolean;
 	} = $props();
 
@@ -36,7 +38,7 @@
 	tabs sit below it as pills: still one tap apart, but sized like controls
 	instead of like a title.
 -->
-<header class="px-[22px] {minimal ? 'pt-3 pb-2' : 'pt-3 pb-1'}">
+<header class="px-[22px] {minimal ? 'hidden pt-3 pb-2 lg:block' : 'pt-3 pb-1'}">
 	<div class="flex items-start gap-3">
 		{#if !minimal}
 			<div class="min-w-0 flex-1">

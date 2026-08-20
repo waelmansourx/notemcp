@@ -4,7 +4,7 @@
 	import { filter, closeFilter } from '$lib/filter.svelte';
 	import { fly } from 'svelte/transition';
 	import { quintOut } from 'svelte/easing';
-	import { tagDisplay } from '$lib/tags';
+	import { tagDepth, tagLeaf, tagParent, tagSegments } from '$lib/tags';
 	import { dayLabel } from '$lib/dates';
 	import type { Tag } from '$lib/types';
 
@@ -24,6 +24,37 @@
 
 	let active = $derived(page.url.searchParams.getAll('tag'));
 	let field = $state<HTMLInputElement | null>(null);
+
+	/*
+	 * The row shows the top level, plus one level down from whatever you've
+	 * already picked.
+	 *
+	 * Every path at once would be the noisiest possible version of this — a
+	 * store with `#notemcp/bug/share` would put three chips in the row for one
+	 * tag. Since a parent already finds everything beneath it, the top level
+	 * is a complete way to reach anything; tapping one reveals the next step
+	 * in, the way you'd actually narrow down.
+	 */
+	let visibleTags = $derived.by(() => {
+		// Top-level chips keep the server's order, which is busiest-first.
+		const rootRank = new Map(
+			tags.filter((t) => tagDepth(t.name) === 0).map((t, i) => [t.name, i] as const)
+		);
+
+		return tags
+			.filter((t) => {
+				if (active.includes(t.name)) return true;
+				const parent = tagParent(t.name);
+				return parent === null || active.includes(parent);
+			})
+			.sort((a, b) => {
+				// Keep a family together: a child sits directly under its parent
+				// rather than wherever its own count would have put it.
+				const ra = rootRank.get(tagSegments(a.name)[0]) ?? Number.MAX_SAFE_INTEGER;
+				const rb = rootRank.get(tagSegments(b.name)[0]) ?? Number.MAX_SAFE_INTEGER;
+				return ra - rb || a.name.localeCompare(b.name);
+			});
+	});
 
 	// Opening the bar should put the caret in it — you opened it to type.
 	// Deep-linking to /?tag=x shouldn't, because the tag is already the query.
@@ -242,11 +273,12 @@
 			{/if}
 		</div>
 
-		{#if tags.length > 0}
+		{#if visibleTags.length > 0}
 			<span class="mx-0.5 h-4 w-px shrink-0" style="background: var(--color-border);"></span>
 
-			{#each tags as tag (tag.id)}
+			{#each visibleTags as tag (tag.id)}
 				{@const on = active.includes(tag.name)}
+				{@const nested = tagDepth(tag.name) > 0}
 				<button
 					type="button"
 					class="shrink-0 rounded-full border px-3 py-1.5 text-[0.82rem] font-semibold whitespace-nowrap active:scale-95"
@@ -254,9 +286,12 @@
 						? 'border-color: transparent; background: var(--color-accent-soft); color: var(--color-accent);'
 						: 'border-color: var(--color-border); color: var(--color-ink-muted); background: none;'}
 					aria-pressed={on}
+					aria-label={`Filter by #${tag.name}`}
 					onclick={() => toggleTag(tag.name)}
 				>
-					#{tagDisplay(tag.name)}
+					<!-- A child says just its own level: the parent it hangs off is
+					     already a chip immediately to its left. -->
+					{nested ? `/${tagLeaf(tag.name)}` : `#${tag.name}`}
 				</button>
 			{/each}
 		{/if}

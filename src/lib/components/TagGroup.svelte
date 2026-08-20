@@ -13,9 +13,9 @@
 		tag: Tag;
 		count: number;
 		notes: ThreadStub[];
-		/** Overrides the header text — used inside a namespace section, where
-		 *  the namespace is already said once and each card only needs its own
-		 *  leaf ("composer", not "features › composer" again). */
+		/** Overrides the header text — used for a card nested under its parent,
+		 *  where the levels above are the cards directly overhead and this one
+		 *  only needs its own ("bug", not "notemcp/bug" again). */
 		label?: string;
 	} = $props();
 

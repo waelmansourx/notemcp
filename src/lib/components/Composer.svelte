@@ -8,17 +8,21 @@
 	import { normalizeTagName } from '$lib/tags';
 	import { continuation, detach, touch, restore } from '$lib/composer.svelte';
 	import { saveDraft, readDraft, clearDraft } from '$lib/draft.svelte';
+	import { suggestions } from '$lib/cache.svelte';
 	import { beginMediaUpload, type PendingMedia } from '$lib/media';
 	import TagPicker from './TagPicker.svelte';
-	import type { Tag } from '$lib/types';
 	import { onMount } from 'svelte';
 	import { fly, fade, scale } from 'svelte/transition';
 	import { quintOut } from 'svelte/easing';
 
 	let { contextTag = null }: { contextTag?: string | null } = $props();
 
-	// From the root layout, so the row is the same here as on the share sheet.
-	let recentTags = $derived((page.data.recentTags ?? []) as Tag[]);
+	// From the root layout, so the row is the same here as on the share sheet —
+	// but read through the local cache rather than straight off `page.data`,
+	// because the layout streams it now instead of blocking navigation on it.
+	// That means the row opens with the tags you had last time instead of
+	// being empty for the length of a Supabase round trip.
+	let recentTags = $derived(suggestions.recent);
 
 	/* ---------------- phone sheet vs. desktop dock ----------------
 
@@ -382,7 +386,22 @@
 			}
 			interim = (settled + pending).trim();
 		};
-		recognition.onerror = () => stopRecording(true);
+		recognition.onerror = (event: any) => {
+			if (!recording) return;
+			// A no-speech timeout or a transient network blip is common mid-
+			// dictation and used to wipe out everything said before it — treat
+			// it as a cancel only when nothing was actually transcribed yet.
+			// When something was, stop cleanly so it saves like a normal Keep.
+			const captured = interim.trim();
+			if (!captured) {
+				voiceError =
+					event?.error === 'not-allowed'
+						? "Voice capture needs microphone access — check this site's permissions."
+						: "Didn't catch that — try again or just type it.";
+				openSheet();
+			}
+			stopRecording(!captured);
+		};
 		recognition.onend = () => {
 			if (recording) stopRecording();
 		};

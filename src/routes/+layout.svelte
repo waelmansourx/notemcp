@@ -5,10 +5,34 @@
 	import { onMount } from 'svelte';
 	import { invalidate, onNavigate } from '$app/navigation';
 	import { browser } from '$app/environment';
-	import { flushOutbox } from '$lib/outbox';
+	import { flushOutbox, flushEdits } from '$lib/outbox';
+	import { setSuggestions } from '$lib/cache.svelte';
+	import { clearCache } from '$lib/cache';
 	import Toast from '$lib/components/Toast.svelte';
 
 	let { children, data } = $props();
+
+	/* The tag row every capture surface offers. The layout streams it rather
+	   than blocking navigation on it, so this is where the answer lands when it
+	   arrives; the composer and the share sheet read the cache, which means
+	   they show the row you had last time and it updates underneath them.
+
+	   Nothing awaits this and nothing renders it directly, so a rejection here
+	   would be an unhandled one — the load already catches, and this catches
+	   again rather than trusting that from a distance. */
+	$effect(() => {
+		const incoming = data.recentTags;
+		let live = true;
+		Promise.resolve(incoming)
+			.then((tags) => {
+				// null means the query failed — leave the cached row alone.
+				if (live && Array.isArray(tags)) setSuggestions(tags);
+			})
+			.catch(() => {});
+		return () => {
+			live = false;
+		};
+	});
 
 	// Opening a note from the stream reads as a link — a jump to a different
 	// page — unless something bridges the two frames. A View Transition does
@@ -37,15 +61,26 @@
 	onMount(() => {
 		const {
 			data: { subscription }
-		} = data.supabase.auth.onAuthStateChange((_event, session) => {
+		} = data.supabase.auth.onAuthStateChange((event, session) => {
+			// The stream is cached on this device, not per account. Signing out
+			// has to take it with it, or the next person to sign in here opens
+			// the app to someone else's notes for as long as the server takes
+			// to answer.
+			if (event === 'SIGNED_OUT') {
+				clearCache();
+				setSuggestions([]);
+			}
+
 			if (session?.expires_at !== data.session?.expires_at) {
 				invalidate('supabase:auth');
 			}
 		});
 
 		// Retry any capture that queued locally but never made it to the
-		// server (e.g. offline at share time).
-		flushOutbox();
+		// server (e.g. offline at share time) — then any edit that didn't
+		// either. Creates first, so a thought still queued as a create is a
+		// real note by the time anything tries to patch it.
+		flushOutbox().then(flushEdits);
 
 		// CodeMirror is the heaviest chunk in the app and is loaded on demand
 		// when a note is opened, which put a visible pause on the first tap of

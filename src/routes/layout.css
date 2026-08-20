@@ -12,6 +12,11 @@
 	--color-accent: #1b5741;
 	--color-accent-soft: #e7efea;
 	--color-accent-ink: #ffffff;
+	/* The namespace half of a path tag. A second hue rather than a lighter
+	   green, so "#notemcp/bug" reads as two parts at a glance instead of one
+	   long word — warm ochre sits with the paper background and stays clearly
+	   apart from the accent the leaf keeps. */
+	--color-accent-path: #8a6a2f;
 	--color-danger: #96393c;
 	--color-danger-soft: #f7ecec;
 	/* The share sheet's confirmation state. These were referenced by
@@ -46,6 +51,7 @@
 		--color-accent: #5fbf95;
 		--color-accent-soft: #1b2e26;
 		--color-accent-ink: #10201a;
+		--color-accent-path: #d9b877;
 		--color-danger: #e0827f;
 		--color-danger-soft: #2e1e1e;
 		--color-success: #5fbf95;
@@ -102,6 +108,9 @@ textarea {
 	font-weight: 700;
 	letter-spacing: -0.012em;
 	color: var(--color-accent);
+}
+.tag-path {
+	color: var(--color-accent-path);
 }
 .tag-lg {
 	font-size: 1.12rem;
