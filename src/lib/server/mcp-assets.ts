@@ -1,9 +1,5 @@
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
-// sharp 0.35 ships declarations but omits the `types` condition from its
-// package exports map; runtime resolution is correct while TS 6 cannot see it.
-// @ts-expect-error upstream package exports do not expose lib/index.d.ts
-import sharp from 'sharp';
 
 const MAX_DOWNLOAD_BYTES = 10 * 1024 * 1024;
 const REMOTE_TIMEOUT_MS = 12_000;
@@ -237,6 +233,13 @@ export async function loadNoteAsset(
 	descriptor: NoteAssetDescriptor,
 	maxSize: number
 ): Promise<LoadedNoteAsset> {
+	// Sharp is a native optional dependency. Loading it at module scope makes a
+	// missing Netlify/libvips binary crash the entire MCP route, including tools
+	// such as list_tags that never touch images. Keep that failure isolated to
+	// get_note_asset while Netlify packages the Linux runtime below.
+	// sharp 0.35 ships declarations but omits the `types` export condition.
+	// @ts-expect-error upstream package exports do not expose lib/index.d.ts
+	const { default: sharp } = await import('sharp');
 	// Keep Svelte's private-env R2 module behind the server-only call path. This
 	// also leaves the pure URL/IP guards independently unit-testable in Bun.
 	const { getObject, objectExists, putObject } = await import('$lib/server/r2');

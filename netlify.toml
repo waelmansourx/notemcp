@@ -4,3 +4,8 @@ publish = "build"
 
 [build.environment]
 NODE_VERSION = "22"
+
+[functions]
+# Keep sharp and its explicitly pinned Linux runtime as external packages so
+# Netlify copies their native binaries instead of partially bundling them.
+external_node_modules = ["sharp", "@img/sharp-linux-x64", "@img/sharp-libvips-linux-x64"]
