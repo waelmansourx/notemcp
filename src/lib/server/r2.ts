@@ -10,7 +10,9 @@ const PRESIGN_TTL_SECONDS = 300;
 
 function client(): AwsClient {
 	if (!env.R2_ACCOUNT_ID || !env.R2_ACCESS_KEY_ID || !env.R2_SECRET_ACCESS_KEY) {
-		throw new Error('R2 is not configured — set R2_ACCOUNT_ID/R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY');
+		throw new Error(
+			'R2 is not configured — set R2_ACCOUNT_ID/R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY'
+		);
 	}
 	return new AwsClient({
 		accessKeyId: env.R2_ACCESS_KEY_ID,
@@ -52,6 +54,25 @@ export async function presignGet(key: string): Promise<string> {
 		aws: { signQuery: true }
 	});
 	return signed.url;
+}
+
+/** Fetch an object through a short-lived signature without exposing the URL. */
+export async function getObject(key: string): Promise<Response> {
+	const url = await presignGet(key);
+	return fetch(url, { method: 'GET', signal: AbortSignal.timeout(15_000) });
+}
+
+/** Store a server-generated derivative such as an MCP-sized image preview. */
+export async function putObject(key: string, contentType: string, body: Uint8Array): Promise<void> {
+	const url = await presignPut(key, contentType);
+	const payload = Uint8Array.from(body).buffer;
+	const response = await fetch(url, {
+		method: 'PUT',
+		headers: { 'content-type': contentType },
+		body: payload,
+		signal: AbortSignal.timeout(15_000)
+	});
+	if (!response.ok) throw new Error(`R2 upload failed (${response.status})`);
 }
 
 /** True if the object actually landed in R2 — guards against confirming an upload that failed midway. */

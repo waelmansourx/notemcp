@@ -2,6 +2,15 @@ import { json } from '@sveltejs/kit';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { PUBLIC_SUPABASE_URL } from '$env/static/public';
 import { env } from '$env/dynamic/private';
+import {
+	pickDefined as pick,
+	searchNotesRpcArgs,
+	semanticSearchNotesRpcArgs
+} from '$lib/server/mcp-arguments';
+import { clampAssetSize, loadNoteAsset, type NoteAssetDescriptor } from '$lib/server/mcp-assets';
+import { semanticEmbedding } from '$lib/server/mcp-embeddings';
+import { fuseNoteRanks, hybridCandidateLimit } from '$lib/server/mcp-hybrid';
+import { imageToolResult, presentMcpPayload, toolResult } from '$lib/server/mcp-presentation';
 import type { RequestHandler } from './$types';
 
 // Token-gated Streamable HTTP MCP endpoint. Auth is a personal access token
@@ -11,10 +20,11 @@ import type { RequestHandler } from './$types';
 // Two rules shape the tool set below, and both exist because an agent's
 // context window is the scarce resource:
 //
-//   * lists never carry note bodies. One captured photo is a base64 data URL
-//     running to megabytes; a single one of those in a list reply would blow
-//     out the window. Lists return `label` + `preview`, get_note returns the
-//     body, and an embedded photo is redacted to `![photo]` even there.
+//   * default lists never carry note bodies or complete imported captions. One
+//     captured photo is a base64 data URL running to megabytes; a single one
+//     of those in a list reply would blow out the window. Lists return compact
+//     `user_text` + `source` projections, get_note returns the rich note, and
+//     an embedded photo is redacted to `![photo]` even there.
 //   * editing is a patch, not a rewrite. `replace_in_note` changes one span
 //     instead of resending the whole note, and every write takes an optional
 //     `if_updated_at` so a note edited on the phone mid-compose is a rejected
@@ -25,7 +35,7 @@ import type { RequestHandler } from './$types';
 // but only once a service-role key is actually configured. Until then we fall
 // back to the anon key, which is exactly what the RPCs were reachable with
 // before, so a missing env var degrades rather than 500s.
-const SERVICE_ROLE_KEY = env.SUPABASE_SERVICE_ROLE_KEY ?? '';
+const SERVICE_ROLE_KEY = env.SUPABASE_SECRET_KEY ?? env.SUPABASE_SERVICE_ROLE_KEY ?? '';
 
 let serviceClient: SupabaseClient | null = null;
 
@@ -38,23 +48,32 @@ function clientFor(fallback: App.Locals['supabase']): App.Locals['supabase'] {
 }
 
 const NOTE_SHAPE =
-	'Notes come back as { id, label, preview, tags, thread_count, updated_at, … }. ' +
-	'`label` names the note even when it has no title (28 of 55 do not) — prefer it over `title` when showing a note to a human. ' +
+	'Compact notes come back as { id, label, user_text, tags, source, root_id, parent_id, is_thread_head, thread_count, updated_at, … }. ' +
+	'`user_text` is only text deliberately written by the user; imported page or social-post copy is source metadata. ' +
+	'`label` names the note even when it has no title — use it when showing a note to a human. ' +
 	'`updated_at` is what you pass back as `if_updated_at` when you write.';
 
 const TOOLS = [
 	{
 		name: 'search_notes',
 		description:
-			"Search the user's notes. Every word in `query` must appear somewhere in the note " +
+			"Search the user's notes. Keyword mode (the default) requires every word in `query` to appear somewhere in the note " +
 			'(title, body, link preview or tag names), in any order — so "note takes time" finds a note ' +
-			'containing all three words, not only that exact phrase. Filter by tag with `tags`, which is ' +
+			'containing all three words, not only that exact phrase. Semantic mode searches by meaning; hybrid ' +
+			'fuses both rankings and is best for vague recollections. Source, date, photo and thread filters ' +
+			'compose with the text query and tags. Filter by tag with `tags`, which is ' +
 			'the right tool for a request like "my #bug notes". Bodies are omitted unless you pass ' +
-			`full=true. ${NOTE_SHAPE}`,
+			`full=true; complete imported source metadata is omitted with them. ${NOTE_SHAPE}`,
 		inputSchema: {
 			type: 'object',
 			properties: {
-				query: { type: 'string', description: 'Words to match. Omit to filter by tag alone.' },
+				query: { type: 'string', description: 'Words to match. Omit to use filters alone.' },
+				mode: {
+					type: 'string',
+					enum: ['keyword', 'semantic', 'hybrid'],
+					description:
+						'Default keyword preserves deterministic matching. Use semantic or hybrid when exact words are uncertain.'
+				},
 				tags: {
 					type: 'array',
 					items: { type: 'string' },
@@ -62,7 +81,50 @@ const TOOLS = [
 						'Only notes carrying ALL of these tags. Case-insensitive, no leading #. ' +
 						'A tag also covers everything under it: "notemcp" matches a note tagged ' +
 						'"notemcp/bug/share", so filter by the broadest level that answers the question ' +
-						'and narrow only if you get too much back.'
+						'and narrow only if you get too much back. Matching is from the start of the ' +
+						'path: "main" does not match "features/main".'
+				},
+				source_type: {
+					type: 'string',
+					description: 'Exact capture/source type, such as "share" or "agent".'
+				},
+				source_domain: {
+					type: 'string',
+					description:
+						'Exact source hostname, case-insensitive and ignoring a leading www., such as "instagram.com".'
+				},
+				has_source: {
+					type: 'boolean',
+					description: 'Whether imported URL/title/description/image source metadata exists.'
+				},
+				has_photos: {
+					type: 'boolean',
+					description: 'Whether the note body contains an embedded or uploaded image.'
+				},
+				created_after: {
+					type: 'string',
+					format: 'date-time',
+					description: 'Created at or after this timestamp (inclusive).'
+				},
+				created_before: {
+					type: 'string',
+					format: 'date-time',
+					description: 'Created before this timestamp (exclusive).'
+				},
+				updated_after: {
+					type: 'string',
+					format: 'date-time',
+					description: 'Updated at or after this timestamp (inclusive).'
+				},
+				updated_before: {
+					type: 'string',
+					format: 'date-time',
+					description: 'Updated before this timestamp (exclusive).'
+				},
+				root_id: {
+					type: 'string',
+					format: 'uuid',
+					description: 'Return the thread head and continuations belonging to this root note.'
 				},
 				limit: { type: 'number', description: 'Max results (default 20, max 100)' },
 				offset: { type: 'number', description: 'Skip this many results, for paging' },
@@ -79,11 +141,38 @@ const TOOLS = [
 		}
 	},
 	{
+		name: 'get_note_asset',
+		description:
+			'Fetch one image associated with an existing note as actual MCP image content. This never accepts a URL: ' +
+			'use asset="source" for the stored link/social preview, or asset="body" plus a zero-based index for ' +
+			'an uploaded image in the note body. Images are resized and compressed on demand; search/list responses never include thumbnails.',
+		inputSchema: {
+			type: 'object',
+			properties: {
+				id: { type: 'string', description: 'Note id (uuid)' },
+				asset: {
+					type: 'string',
+					enum: ['source', 'body'],
+					description: 'Default source.'
+				},
+				index: {
+					type: 'number',
+					description: 'Zero-based image index. Default 0.'
+				},
+				max_size: {
+					type: 'number',
+					description: 'Maximum width/height in pixels, clamped to 512–768. Default 640.'
+				}
+			},
+			required: ['id']
+		}
+	},
+	{
 		name: 'list_recent_notes',
 		description:
 			"List the user's notes, most recently touched first — the same order as the app's stream, " +
 			'so "recent" means the same thing in both. Returns thread heads only unless you ask for ' +
-			`continuations. Bodies are omitted unless you pass full=true. ${NOTE_SHAPE}`,
+			`continuations. Bodies and complete imported source metadata are omitted unless you pass full=true. ${NOTE_SHAPE}`,
 		inputSchema: {
 			type: 'object',
 			properties: {
@@ -112,9 +201,10 @@ const TOOLS = [
 		name: 'get_note',
 		description:
 			'Fetch one note in full, plus `thread`: the thoughts appended to it, oldest first. ' +
-			'An embedded photo appears as `![photo]` — the real bytes are a multi-megabyte data URL. ' +
-			'Because of that, a note with has_photos=true cannot be rewritten whole; patch it with ' +
-			'replace_in_note or append_to_note.',
+			'`label` identifies it, `user_text` is user-authored, and `source` is the single canonical home for ' +
+			'imported context. `source.image_available` tells you whether get_note_asset can fetch its preview. ' +
+			'Body images appear as `![photo]`; retrieve bytes with get_note_asset. A note with has_photos=true ' +
+			'cannot be rewritten whole, so patch it with replace_in_note or append_to_note.',
 		inputSchema: {
 			type: 'object',
 			properties: {
@@ -187,7 +277,10 @@ const TOOLS = [
 			properties: {
 				id: { type: 'string' },
 				content_markdown: { type: 'string' },
-				if_updated_at: { type: 'string', description: 'Reject the write if the note changed since you read it.' }
+				if_updated_at: {
+					type: 'string',
+					description: 'Reject the write if the note changed since you read it.'
+				}
 			},
 			required: ['id', 'content_markdown']
 		}
@@ -242,7 +335,7 @@ const TOOLS = [
 	{
 		name: 'delete_note',
 		description:
-			"Move a note to the trash (a soft delete — the app can still recover it). A note with " +
+			'Move a note to the trash (a soft delete — the app can still recover it). A note with ' +
 			'continuations takes its whole thread with it, so that has to be asked for with cascade=true.',
 		inputSchema: {
 			type: 'object',
@@ -274,33 +367,14 @@ function rpcError(id: unknown, code: number, message: string) {
 	return json({ jsonrpc: '2.0', id, error: { code, message } }, { headers: CORS_HEADERS });
 }
 
-function toolResult(payload: unknown, isError = false) {
-	return { content: [{ type: 'text', text: JSON.stringify(payload) }], isError };
-}
-
 function clampLimit(n: unknown) {
 	const parsed = Number(n);
 	return Math.min(Math.max(Number.isFinite(parsed) && parsed > 0 ? parsed : 20, 1), 100);
 }
 
-/**
- * Copy only the arguments the caller actually sent.
- *
- * The Postgres functions distinguish "not given" (use the default, leave the
- * field alone) from an explicit value, and they can only do that if an
- * omitted tool argument stays omitted in the RPC body. Forwarding `undefined`
- * as `null` — which the previous version did for every field — is what made
- * `p_order`, `p_archived` and friends impossible to default sensibly.
- */
-function pick(
-	args: Record<string, unknown>,
-	mapping: Record<string, string>,
-	into: Record<string, unknown>
-) {
-	for (const [arg, param] of Object.entries(mapping)) {
-		if (args[arg] !== undefined && args[arg] !== null) into[param] = args[arg];
-	}
-	return into;
+function clampOffset(n: unknown) {
+	const parsed = Number(n);
+	return Math.max(Number.isFinite(parsed) ? Math.floor(parsed) : 0, 0);
 }
 
 async function callTool(
@@ -310,21 +384,60 @@ async function callTool(
 	args: Record<string, unknown>
 ) {
 	if (!token) {
-		return toolResult({ error: 'Missing bearer token. Pass Authorization: Bearer <token>.' }, true);
+		return toolResult(
+			name,
+			{ error: 'Missing bearer token. Pass Authorization: Bearer <token>.' },
+			true
+		);
 	}
 
 	let fn: string;
 	let rpcArgs: Record<string, unknown>;
 
 	switch (name) {
-		case 'search_notes':
-			fn = 'mcp_search_notes';
-			rpcArgs = pick(
-				args,
-				{ tags: 'p_tags', offset: 'p_offset', archived: 'p_archived', full: 'p_full' },
-				{ p_token: token, p_query: String(args.query ?? ''), p_limit: clampLimit(args.limit) }
-			);
-			break;
+		case 'search_notes': {
+			const mode =
+				args.mode === 'semantic' || args.mode === 'hybrid' ? args.mode : ('keyword' as const);
+			const limit = clampLimit(args.limit);
+			if (mode === 'keyword') {
+				fn = 'mcp_search_notes';
+				rpcArgs = searchNotesRpcArgs(token, args, limit);
+				break;
+			}
+
+			const query = typeof args.query === 'string' ? args.query.trim() : '';
+			if (!query) {
+				return toolResult(name, { error: `${mode} search requires a non-empty query` }, true);
+			}
+			const { embedding } = await semanticEmbedding(token, query);
+
+			if (mode === 'semantic') {
+				fn = 'mcp_search_notes_semantic';
+				rpcArgs = semanticSearchNotesRpcArgs(token, args, embedding, limit);
+				break;
+			}
+
+			const offset = clampOffset(args.offset);
+			const candidateLimit = hybridCandidateLimit(offset, limit);
+			const [keywordResult, semanticResult] = await Promise.all([
+				supabase.rpc('mcp_search_notes', searchNotesRpcArgs(token, args, candidateLimit, 0)),
+				supabase.rpc(
+					'mcp_search_notes_semantic',
+					semanticSearchNotesRpcArgs(token, args, embedding, candidateLimit, 0)
+				)
+			]);
+			if (keywordResult.error) {
+				return toolResult(name, { error: keywordResult.error.message }, true);
+			}
+			if (semanticResult.error) {
+				return toolResult(name, { error: semanticResult.error.message }, true);
+			}
+
+			const keyword = Array.isArray(keywordResult.data) ? keywordResult.data : [];
+			const semantic = Array.isArray(semanticResult.data) ? semanticResult.data : [];
+			const fused = fuseNoteRanks(keyword, semantic, offset, limit);
+			return toolResult(name, presentMcpPayload(name, args, fused));
+		}
 		case 'list_recent_notes':
 			fn = 'mcp_list_recent_notes';
 			rpcArgs = pick(
@@ -343,6 +456,35 @@ async function callTool(
 			fn = 'mcp_get_note';
 			rpcArgs = pick(args, { full: 'p_full' }, { p_token: token, p_note_id: args.id });
 			break;
+		case 'get_note_asset': {
+			const asset = args.asset === 'body' ? 'body' : 'source';
+			const index = Math.max(Math.floor(Number(args.index) || 0), 0);
+			const descriptorResult = await supabase.rpc('mcp_get_note_asset_descriptor', {
+				p_token: token,
+				p_note_id: args.id,
+				p_asset: asset,
+				p_index: index
+			});
+			if (descriptorResult.error) {
+				return toolResult(name, { error: descriptorResult.error.message }, true);
+			}
+
+			const descriptor = descriptorResult.data as NoteAssetDescriptor;
+			const loaded = await loadNoteAsset(descriptor, clampAssetSize(args.max_size));
+			return imageToolResult(
+				{
+					note_id: descriptor.note_id,
+					asset: descriptor.asset,
+					index: descriptor.index,
+					mime_type: loaded.mimeType,
+					width: loaded.width,
+					height: loaded.height,
+					byte_size: loaded.byteSize,
+					cached: loaded.cached
+				},
+				loaded
+			);
+		}
 		case 'list_tags':
 			fn = 'mcp_list_tags';
 			rpcArgs = { p_token: token };
@@ -418,8 +560,8 @@ async function callTool(
 	}
 
 	const { data, error } = await supabase.rpc(fn, rpcArgs);
-	if (error) return toolResult({ error: error.message }, true);
-	return toolResult(data);
+	if (error) return toolResult(name, { error: error.message }, true);
+	return toolResult(name, presentMcpPayload(name, args, data));
 }
 
 export const OPTIONS: RequestHandler = async () => new Response(null, { headers: CORS_HEADERS });
@@ -455,7 +597,7 @@ export const POST: RequestHandler = async ({ request, locals: { supabase } }) =>
 		return rpcResult(id, {
 			protocolVersion: '2025-06-18',
 			capabilities: { tools: {} },
-			serverInfo: { name: 'notemcp', version: '0.2.0' }
+			serverInfo: { name: 'notemcp', version: '0.3.0' }
 		});
 	}
 
@@ -464,8 +606,8 @@ export const POST: RequestHandler = async ({ request, locals: { supabase } }) =>
 	if (method === 'tools/list') return rpcResult(id, { tools: TOOLS });
 
 	if (method === 'tools/call') {
+		const name = params?.name ?? '';
 		try {
-			const name = params?.name ?? '';
 			const args = params?.arguments ?? {};
 			const result = await callTool(clientFor(supabase), token, name, args);
 			if (result === null) return rpcError(id, -32602, `Unknown tool: ${name}`);
@@ -476,7 +618,7 @@ export const POST: RequestHandler = async ({ request, locals: { supabase } }) =>
 			// a raw 502 to the MCP client instead of a JSON-RPC error it can
 			// actually show the user and retry against.
 			const message = err instanceof Error ? err.message : 'Unexpected error';
-			return rpcResult(id, toolResult({ error: message }, true));
+			return rpcResult(id, toolResult(name, { error: message }, true));
 		}
 	}
 
