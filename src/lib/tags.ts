@@ -111,6 +111,20 @@ export function tagMatchesSearch(query: string, name: string): boolean {
 	);
 }
 
+/** Tags typed inline in freeform text ("caught up on #notemcp/bug/share
+ *  today" -> ["notemcp/bug/share"]) — the caption-app convention, where the
+ *  tag stays part of what you wrote instead of living in a separate field. */
+const HASHTAG_RE = /#([a-z0-9][\w-]*(?:\/[a-z0-9][\w-]*)*)/gi;
+
+export function extractHashtags(text: string): string[] {
+	const names: string[] = [];
+	for (const match of text.matchAll(HASHTAG_RE)) {
+		const name = normalizeTagName(match[1]);
+		if (name && !names.includes(name)) names.push(name);
+	}
+	return names;
+}
+
 export interface TagNode {
 	/** The full path, which is also the tag's stored name. */
 	name: string;

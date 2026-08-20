@@ -1,9 +1,9 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
-	import { onMount } from 'svelte';
+	import { onMount, tick } from 'svelte';
 	import { hostname } from '$lib/dates';
-	import { normalizeTagName } from '$lib/tags';
+	import { extractHashtags, normalizeTagName } from '$lib/tags';
 	import { queueNote, syncEntryNow } from '$lib/outbox';
 	import { addPending, removePending } from '$lib/stream.svelte';
 	import { continuation, detach, restore, touch } from '$lib/composer.svelte';
@@ -66,6 +66,15 @@
 	// going and gets you out of it in one tap.
 	onMount(restore);
 
+	// Focus the caption the instant the sheet mounts rather than waiting on
+	// its entrance transition — the sheet is already visible enough to type
+	// into well before it finishes sliding up. The onintroend re-focus below
+	// stays as a backstop for Android, where a caret that appears mid-slide
+	// sometimes doesn't bring the IME with it.
+	onMount(() => {
+		captionEl?.focus();
+	});
+
 	// Sharing from another app is a capture surface in its own right, not a
 	// fallback for the in-app composer — so it gets the same row of your own
 	// tags instead of five hard-coded ones. Like the composer, it no longer
@@ -95,11 +104,6 @@
 	let dismissed = $state(false);
 
 	onMount(() => {
-		captionEl?.focus();
-		requestAnimationFrame(() => {
-			captionEl?.focus();
-		});
-
 		if (sourceUrl) {
 			previewLoading = true;
 			fetch(`/api/link-preview?url=${encodeURIComponent(sourceUrl)}`)
@@ -175,12 +179,40 @@
 	// the OS kills the process before close() lands, relaunching the app
 	// resumes on the home river instead of a dead capture screen.
 	async function leave(sending?: Promise<unknown>) {
-		await goto('/', { replaceState: true, noScroll: true });
+		// The history entry is what has to land before close() — not the root
+		// layout's own data (notably its session check, which can hit the
+		// network on a token refresh). Waiting on goto() unconditionally meant
+		// a slow or flaky connection right after a share intent could leave the
+		// sheet stuck on screen indefinitely; capping the wait keeps this
+		// bounded without giving up the safety net the history replace exists
+		// for.
+		await Promise.race([
+			goto('/', { replaceState: true, noScroll: true }),
+			new Promise((resolve) => setTimeout(resolve, 800))
+		]);
 		dismissed = true;
 		// Closing the tab aborts anything still in flight, so that — and only
 		// that — waits for the upload. The sheet is already gone by then.
 		if (sending) await sending.catch(() => {});
 		window.close();
+	}
+
+	// Inserts "#" at the caret rather than opening a picker — same move as
+	// typing a hashtag into a caption on TikTok. save() below pulls it (and
+	// whatever name gets typed after it) back out of the caption text, so
+	// this needs no state of its own.
+	async function insertHashtag() {
+		if (submitted) return;
+		const el = captionEl;
+		const start = el?.selectionStart ?? caption.length;
+		const end = el?.selectionEnd ?? caption.length;
+		const prev = caption[start - 1];
+		const insert = (prev && !/\s/.test(prev) ? ' ' : '') + '#';
+		caption = caption.slice(0, start) + insert + caption.slice(end);
+		const cursor = start + insert.length;
+		await tick();
+		el?.focus();
+		el?.setSelectionRange(cursor, cursor);
 	}
 
 	async function save(tagNames: string[], key: string) {
@@ -195,6 +227,11 @@
 			await sharedImageUploadStart?.catch(() => {});
 		}
 
+		// Whatever's typed inline (see insertHashtag) joins whatever tag button
+		// was tapped, if any — the two aren't alternatives, they're the same
+		// "what's this about" answer said two different ways.
+		const allTags = [...tagNames, ...extractHashtags(caption)];
+
 		const entry = queueNote({
 			title: displayTitle,
 			content_markdown: buildContent(),
@@ -204,7 +241,7 @@
 			source_description: fetchedDescription,
 			source_image: fetchedImage,
 			parent_id: continuation.target?.id ?? null,
-			tagNames: tagNames.map(normalizeTagName).filter(Boolean)
+			tagNames: [...new Set(allTags.map(normalizeTagName).filter(Boolean))]
 		});
 		touch();
 
@@ -264,9 +301,14 @@
 			class="flex max-h-[92vh] flex-col rounded-t-[1.375rem] px-[1.125rem] pt-[0.625rem]"
 			style="background: var(--color-surface); --fade-to: var(--color-surface); box-shadow: 0 -8px 34px rgba(0,0,0,.16); padding-bottom: calc(0.75rem + env(safe-area-inset-bottom));"
 			transition:fly={{ y: 420, duration: 320, easing: quintOut }}
+			onintroend={() => captionEl?.focus()}
 			onclick={(e) => e.stopPropagation()}
 			role="presentation"
 		>
+			<!-- Focusing while the sheet is still translating up gets a visible
+			     caret but no keyboard on Android — the IME wants the field settled
+			     first. Waiting for the sheet's own entrance transition to finish
+			     is a free, reliable signal for "settled" without a magic delay. -->
 			<div
 				class="mx-auto mb-3 h-1 w-9 shrink-0 rounded-full"
 				style="background: var(--color-border);"
@@ -344,7 +386,6 @@
 				{/if}
 
 				<textarea
-					autofocus
 					bind:this={captionEl}
 					bind:value={caption}
 					placeholder="Add a thought…"
@@ -451,14 +492,18 @@
 				</button>
 			</div>
 
-			<!-- Dismissing sits at the left; Save takes the remaining width -->
+			<!-- Cancel is the one destructive move here, so it reads reddish. The
+				     "#" button is the tag picker: it drops a hashtag into the caption
+				     instead of opening a separate row, so Save no longer has to
+				     compete with a whole picker UI for attention — it's sized and
+				     coloured like the quick tags next to it rather than shouting. -->
 			<div class="flex shrink-0 items-center gap-2">
 				<button
 					type="button"
 					aria-label="Cancel"
 					disabled={submitted}
 					class="grid h-[2.875rem] w-[2.875rem] shrink-0 place-items-center rounded-full disabled:opacity-40"
-					style="background: var(--color-surface-2); color: var(--color-ink-2);"
+					style="background: var(--color-danger-soft); color: var(--color-danger);"
 					onclick={() => leave()}
 				>
 					<svg
@@ -474,11 +519,22 @@
 
 				<button
 					type="button"
+					aria-label="Add a tag"
+					disabled={submitted}
+					class="grid h-[2.875rem] w-[2.875rem] shrink-0 place-items-center rounded-full text-[1.15rem] font-bold active:scale-95 disabled:opacity-40"
+					style="background: var(--color-surface-2); color: var(--color-accent);"
+					onclick={insertHashtag}
+				>
+					#
+				</button>
+
+				<button
+					type="button"
 					disabled={submitted}
 					class="flex h-[2.875rem] flex-1 items-center justify-center gap-1.5 rounded-full text-[1rem] font-bold tracking-[-0.015em] active:scale-[0.98] disabled:opacity-40"
 					style={savedTag === 'inbox'
 						? 'background: var(--color-success-soft); color: var(--color-success);'
-						: 'background: var(--color-accent); color: var(--color-accent-ink); box-shadow: 0 8px 20px rgba(20,80,58,.24);'}
+						: 'background: var(--color-surface-2); color: var(--color-ink);'}
 					onclick={() => save([], 'inbox')}
 				>
 					{#if savedTag === 'inbox'}

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import {
+	extractHashtags,
 	flattenTagTree,
 	normalizeTagName,
 	tagAncestors,
@@ -35,6 +36,30 @@ describe('normalizeTagName', () => {
 	it('returns empty for input that is only punctuation or whitespace', () => {
 		expect(normalizeTagName('   ')).toBe('');
 		expect(normalizeTagName('#')).toBe('');
+	});
+});
+
+describe('extractHashtags', () => {
+	it('finds a hashtag typed inline in a sentence', () => {
+		expect(extractHashtags('caught up on #notemcp/bug/share today')).toEqual([
+			'notemcp/bug/share'
+		]);
+	});
+
+	it('returns nothing for plain text', () => {
+		expect(extractHashtags('just a thought, no tags')).toEqual([]);
+	});
+
+	it('dedupes repeats and preserves first-seen order', () => {
+		expect(extractHashtags('#idea then #bug then #idea again')).toEqual(['idea', 'bug']);
+	});
+
+	it('does not treat a bare # as a tag', () => {
+		expect(extractHashtags('issue #123 needs a # placeholder')).toEqual(['123']);
+	});
+
+	it('normalizes case the same way a typed tag would', () => {
+		expect(extractHashtags('#Idea')).toEqual(['idea']);
 	});
 });
 
