@@ -62,6 +62,25 @@ describe('compact MCP notes', () => {
 		expect(note.label).not.toBe('Imported words must not become the thought');
 	});
 
+	it('does not advertise legacy data URLs as retrievable source previews', () => {
+		const note = compactMcpNote({
+			...importedShare,
+			source_image: 'data:image/jpeg;base64,AAAA'
+		}) as Record<string, any>;
+
+		expect(note.source.image_available).toBe(false);
+		expect(note).not.toHaveProperty('source_image');
+	});
+
+	it('does not advertise source preview URLs the HTTPS fetcher will reject', () => {
+		const note = compactMcpNote({
+			...importedShare,
+			source_image: 'http://images.example/preview.jpg'
+		}) as Record<string, any>;
+
+		expect(note.source.image_available).toBe(false);
+	});
+
 	it('makes a continuation relationship explicit in compact results', () => {
 		const note = compactMcpNote({
 			...importedShare,

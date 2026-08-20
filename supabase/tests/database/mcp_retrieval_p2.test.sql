@@ -1,6 +1,6 @@
 begin;
 
-select plan(10);
+select plan(13);
 
 create temp table p2_fixture (
   user_id uuid,
@@ -27,6 +27,16 @@ select
   'notemcp-p2-test@example.invalid', '', now(), '{}'::jsonb, '{}'::jsonb, now(), now()
 from p2_fixture;
 
+insert into auth.users (
+  instance_id, id, aud, role, email, encrypted_password, email_confirmed_at,
+  raw_app_meta_data, raw_user_meta_data, created_at, updated_at
+) values (
+  '00000000-0000-0000-0000-000000000000',
+  '20000000-0000-0000-0000-000000000099',
+  'authenticated', 'authenticated', 'notemcp-p2-other@example.invalid', '', now(),
+  '{}'::jsonb, '{}'::jsonb, now(), now()
+);
+
 insert into public.api_tokens (id, user_id, name, token_hash)
 select
   gen_random_uuid(), user_id, 'P2 database test',
@@ -48,6 +58,15 @@ select
   note_b, user_id, 'Garden notes', 'Water the basil on Friday',
   null, 'manual', null, null, null
 from p2_fixture;
+
+insert into public.notes (
+  id, user_id, title, content_markdown, source_image
+) values (
+  '20000000-0000-0000-0000-000000000098',
+  '20000000-0000-0000-0000-000000000099',
+  'Other user private note', 'Must not be visible through MCP',
+  'https://images.example.com/private.jpg'
+);
 
 select ok(
   exists(select 1 from pg_extension where extname = 'vector'),
@@ -119,6 +138,39 @@ select is(
   public.mcp_get_note_asset_descriptor(token, note_a, 'source', 0)->>'url',
   'https://images.example.com/xray.jpg',
   'source assets are resolved from the owned note rather than caller URLs'
+)
+from p2_fixture;
+
+select throws_ok(
+  format(
+    'select public.mcp_get_note_asset_descriptor(%L, %L::uuid, %L, 0)',
+    token, note_b, 'source'
+  ),
+  'P0002',
+  'Source image not found',
+  'a note without source_image returns a clean missing-preview error'
+)
+from p2_fixture;
+
+select throws_ok(
+  format(
+    'select public.mcp_get_note_asset_descriptor(%L, %L::uuid, %L, 0)',
+    token, '20000000-0000-0000-0000-000000000097', 'source'
+  ),
+  'P0002',
+  'Note not found',
+  'a nonexistent note fails cleanly'
+)
+from p2_fixture;
+
+select throws_ok(
+  format(
+    'select public.mcp_get_note_asset_descriptor(%L, %L::uuid, %L, 0)',
+    token, '20000000-0000-0000-0000-000000000098', 'source'
+  ),
+  'P0002',
+  'Note not found',
+  'another user''s note is indistinguishable from a nonexistent note'
 )
 from p2_fixture;
 

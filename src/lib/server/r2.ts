@@ -78,7 +78,10 @@ export async function putObject(key: string, contentType: string, body: Uint8Arr
 /** True if the object actually landed in R2 — guards against confirming an upload that failed midway. */
 export async function objectExists(key: string): Promise<boolean> {
 	const signed = await client().sign(objectUrl(key), { method: 'HEAD', aws: { signQuery: true } });
-	const res = await fetch(signed.url, { method: 'HEAD' });
+	const res = await fetch(signed.url, {
+		method: 'HEAD',
+		signal: AbortSignal.timeout(15_000)
+	});
 	return res.ok;
 }
 

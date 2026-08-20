@@ -7,7 +7,16 @@ import {
 	searchNotesRpcArgs,
 	semanticSearchNotesRpcArgs
 } from '$lib/server/mcp-arguments';
-import { clampAssetSize, loadNoteAsset, type NoteAssetDescriptor } from '$lib/server/mcp-assets';
+import {
+	GET_NOTE_ASSET_INPUT_SCHEMA,
+	NOTE_ASSET_OUTPUT_SCHEMA,
+	loadNoteAsset,
+	noteAssetDescriptorErrorMessage,
+	noteAssetDescriptorRpcArgs,
+	noteAssetErrorMessage,
+	parseNoteAssetRequest,
+	type NoteAssetDescriptor
+} from '$lib/server/mcp-assets';
 import { semanticEmbedding } from '$lib/server/mcp-embeddings';
 import { fuseNoteRanks, hybridCandidateLimit } from '$lib/server/mcp-hybrid';
 import { imageToolResult, presentMcpPayload, toolResult } from '$lib/server/mcp-presentation';
@@ -220,29 +229,13 @@ const TOOLS = [
 	{
 		name: 'get_note_asset',
 		description:
-			'Fetch one image associated with an existing note as actual MCP image content. This never accepts a URL: ' +
-			'use asset="source" for the stored link/social preview, or asset="body" plus a zero-based index for ' +
-			'an uploaded image in the note body. Images are resized and compressed on demand; search/list responses never include thumbnails.',
-		inputSchema: {
-			type: 'object',
-			properties: {
-				id: { type: 'string', description: 'Note id (uuid)' },
-				asset: {
-					type: 'string',
-					enum: ['source', 'body'],
-					description: 'Default source.'
-				},
-				index: {
-					type: 'number',
-					description: 'Zero-based image index. Default 0.'
-				},
-				max_size: {
-					type: 'number',
-					description: 'Maximum width/height in pixels, clamped to 512–768. Default 640.'
-				}
-			},
-			required: ['id']
-		}
+			'Return an image already associated with a stored note as native MCP image content. Use this after ' +
+			'search or list when visual inspection would help identify or understand a candidate source; do not ' +
+			'call it for every note. It never accepts a URL. The default asset is the note’s stored source preview; ' +
+			'asset="body" can select an existing uploaded image referenced by the note. Images are bounded, resized, ' +
+			'and compressed on demand, while search/list responses remain text-only.',
+		inputSchema: GET_NOTE_ASSET_INPUT_SCHEMA,
+		outputSchema: NOTE_ASSET_OUTPUT_SCHEMA
 	},
 	{
 		name: 'list_recent_notes',
@@ -536,20 +529,34 @@ async function callTool(
 			rpcArgs = pick(args, { full: 'p_full' }, { p_token: token, p_note_id: args.id });
 			break;
 		case 'get_note_asset': {
-			const asset = args.asset === 'body' ? 'body' : 'source';
-			const index = Math.max(Math.floor(Number(args.index) || 0), 0);
+			let request;
+			try {
+				request = parseNoteAssetRequest(args);
+			} catch (error) {
+				return toolResult(
+					name,
+					{ error: error instanceof Error ? error.message : 'Invalid get_note_asset arguments' },
+					true
+				);
+			}
 			const descriptorResult = await supabase.rpc('mcp_get_note_asset_descriptor', {
-				p_token: token,
-				p_note_id: args.id,
-				p_asset: asset,
-				p_index: index
+				...noteAssetDescriptorRpcArgs(token, request)
 			});
 			if (descriptorResult.error) {
-				return toolResult(name, { error: descriptorResult.error.message }, true);
+				return toolResult(
+					name,
+					{ error: noteAssetDescriptorErrorMessage(descriptorResult.error.message, request.asset) },
+					true
+				);
 			}
 
 			const descriptor = descriptorResult.data as NoteAssetDescriptor;
-			const loaded = await loadNoteAsset(descriptor, clampAssetSize(args.max_size));
+			let loaded;
+			try {
+				loaded = await loadNoteAsset(descriptor, request.maxSize);
+			} catch (error) {
+				return toolResult(name, { error: noteAssetErrorMessage(error, request.asset) }, true);
+			}
 			return imageToolResult(
 				{
 					note_id: descriptor.note_id,

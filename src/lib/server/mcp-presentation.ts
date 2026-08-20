@@ -47,6 +47,17 @@ function sourceDomain(value: unknown): string | null {
 	}
 }
 
+function retrievableSourceImage(value: unknown): boolean {
+	const image = storedText(value);
+	if (!image) return false;
+	try {
+		const url = new URL(image);
+		return url.protocol === 'https:' && !url.username && !url.password && !url.port;
+	} catch {
+		return false;
+	}
+}
+
 /**
  * `preview` is a PostgREST computed column derived only from
  * `content_markdown`. Share capture stores the user's annotation there and
@@ -73,7 +84,7 @@ function noteSource(note: JsonRecord, rich: boolean): PresentedSource | null {
 		domain,
 		title: rich ? importedTitle : truncate(text(importedTitle), 120),
 		url,
-		image_available: Boolean(image)
+		image_available: retrievableSourceImage(image)
 	};
 
 	if (rich) source.description = description;
