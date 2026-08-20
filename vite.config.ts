@@ -89,6 +89,16 @@ export default defineConfig({
 						url: 'url',
 						files: [{ name: 'images', accept: ['image/*'] }]
 					}
+				},
+				// Without this, Android treats a share (or any launch) as "open a
+				// new document" — a brand new Activity with its own cold start,
+				// hence its own OS splash screen, even with the app already open
+				// in another task. `navigate-existing` tells it to bring that
+				// window forward and navigate it instead, which is what makes
+				// sharing into an already-open app feel instant rather than a
+				// second app launch.
+				launch_handler: {
+					client_mode: 'navigate-existing'
 				}
 			} as any,
 			injectManifest: {
