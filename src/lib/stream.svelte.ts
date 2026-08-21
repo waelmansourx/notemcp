@@ -12,11 +12,24 @@ import type { OutboxEntry } from './outbox';
  */
 export const pending = $state<{ items: Note[] }>({ items: [] });
 
+/**
+ * Permanent UI identity for a note.
+ *
+ * New captures already have a client id before Postgres gives them a server id.
+ * Keeping the Svelte key on that client id means the rendered Entry survives
+ * the whole local -> synced -> refetched hand-off instead of being destroyed
+ * when `id` changes from `pending:*` to the database UUID.
+ */
+export function noteKey(note: Note): string {
+	return note.client_id ?? note.id;
+}
+
 /** Shape a queued outbox entry like a Note so the stream can render it. */
 export function asNote(entry: OutboxEntry): Note {
 	return {
 		id: `pending:${entry.client_id}`,
 		client_id: entry.client_id,
+		sync_status: 'local',
 		user_id: '',
 		title: entry.title,
 		content_markdown: entry.content_markdown,
@@ -48,9 +61,9 @@ export function asNote(entry: OutboxEntry): Note {
 	};
 }
 
-/** True for a note that is still only local — it has no server id to open. */
+/** True only while this browser is still waiting for the create acknowledgement. */
 export function isPending(note: Note): boolean {
-	return note.id.startsWith('pending:');
+	return note.sync_status === 'local';
 }
 
 export function addPending(entry: OutboxEntry) {
@@ -75,14 +88,14 @@ export function updatePendingVoice(
 /**
  * The server has this one now.
  *
- * Swapping in the real id is what takes the note out of its "still syncing"
- * look — full opacity, openable — the moment the POST comes back, instead of
- * at the end of the stream refetch that follows it. The local copy stays in
- * the list until that refetch lands, so nothing blinks; `withPending` drops it
- * by `client_id` once the server's version is in the loaded data.
+ * The database id becomes available for links/API calls, while `client_id`
+ * remains the permanent UI identity. Marking sync explicitly also means the
+ * view no longer has to infer lifecycle state from the spelling of `id`.
  */
 export function settlePending(clientId: string, id: string) {
-	pending.items = pending.items.map((n) => (n.client_id === clientId ? { ...n, id } : n));
+	pending.items = pending.items.map((n) =>
+		n.client_id === clientId ? { ...n, id, sync_status: 'synced' } : n
+	);
 }
 
 export function removePending(clientId: string) {
@@ -93,8 +106,8 @@ export function removePending(clientId: string) {
  * Merge queued notes into a loaded stream of threads.
  *
  * A note that has already come back from the server is dropped from the
- * pending side by `client_id`, so the hand-off between the two is invisible
- * rather than a flicker of duplicates.
+ * pending side by `client_id`. Both representations have the same `noteKey`,
+ * so Svelte updates the existing component in place during that hand-off.
  *
  * A queued *continuation* is folded into the thread it belongs to and that
  * thread moves to the top — the same thing the server's trigger will do a
