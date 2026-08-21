@@ -7,7 +7,7 @@
 	import StreamFilter from '$lib/components/StreamFilter.svelte';
 	import DayHeading from '$lib/components/DayHeading.svelte';
 	import { groupByDay, streamDate } from '$lib/dates';
-	import { withPending } from '$lib/stream.svelte';
+	import { noteKey, withPending } from '$lib/stream.svelte';
 	import { applyFilter, filter } from '$lib/filter.svelte';
 	import { loadStream, loadAllTags, saveStream, saveAllTags } from '$lib/cache';
 	import type { Note } from '$lib/types';
@@ -195,7 +195,7 @@
 			{:else}
 				{#each groups as group (group.key)}
 					<DayHeading label={group.label} />
-					{#each group.notes as note (note.id)}
+					{#each group.notes as note (noteKey(note))}
 						<Entry {note} showTime />
 					{/each}
 				{/each}
