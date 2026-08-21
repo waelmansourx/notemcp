@@ -3,7 +3,7 @@
 	import './layout.css';
 	import favicon from '$lib/assets/favicon.svg';
 	import { onMount } from 'svelte';
-	import { invalidate, onNavigate } from '$app/navigation';
+	import { afterNavigate, beforeNavigate, invalidate, onNavigate } from '$app/navigation';
 	import { browser, dev } from '$app/environment';
 	import { flushOutbox, flushEdits } from '$lib/outbox';
 	import { setSuggestions } from '$lib/cache.svelte';
@@ -11,6 +11,60 @@
 	import Toast from '$lib/components/Toast.svelte';
 
 	let { children, data } = $props();
+
+	let navigationActive = $state(false);
+	let navigationProgress = $state(0);
+	let navigationSlow = $state(false);
+	let progressTimer: ReturnType<typeof setInterval> | undefined;
+	let slowTimer: ReturnType<typeof setTimeout> | undefined;
+	let finishTimer: ReturnType<typeof setTimeout> | undefined;
+
+	function clearNavigationTimers() {
+		if (progressTimer !== undefined) clearInterval(progressTimer);
+		if (slowTimer !== undefined) clearTimeout(slowTimer);
+		if (finishTimer !== undefined) clearTimeout(finishTimer);
+		progressTimer = undefined;
+		slowTimer = undefined;
+		finishTimer = undefined;
+	}
+
+	function beginNavigationFeedback() {
+		clearNavigationTimers();
+		navigationActive = true;
+		navigationSlow = false;
+		navigationProgress = 8;
+
+		// Move quickly at first, then asymptotically approach 90%. This makes
+		// every navigation acknowledge the tap immediately without pretending
+		// we know the real network percentage.
+		progressTimer = setInterval(() => {
+			const remaining = 90 - navigationProgress;
+			navigationProgress = Math.min(90, navigationProgress + Math.max(1.2, remaining * 0.12));
+		}, 140);
+
+		// Fast navigations only ever show the top rail. A larger interruption
+		// is reserved for waits long enough that the user might otherwise think
+		// the tap was missed.
+		slowTimer = setTimeout(() => {
+			navigationSlow = true;
+		}, 850);
+	}
+
+	function finishNavigationFeedback() {
+		if (!navigationActive) return;
+		if (progressTimer !== undefined) clearInterval(progressTimer);
+		if (slowTimer !== undefined) clearTimeout(slowTimer);
+		progressTimer = undefined;
+		slowTimer = undefined;
+
+		navigationSlow = false;
+		navigationProgress = 100;
+		finishTimer = setTimeout(() => {
+			navigationActive = false;
+			navigationProgress = 0;
+			finishTimer = undefined;
+		}, 180);
+	}
 
 	/* The tag row every capture surface offers. The layout streams it rather
 	   than blocking navigation on it, so this is where the answer lands when it
@@ -32,6 +86,20 @@
 		return () => {
 			live = false;
 		};
+	});
+
+	// Start the rail at the earliest client-navigation hook, before route data
+	// and code have finished resolving. Full-page/external navigations keep the
+	// browser's own loading affordance instead.
+	beforeNavigate((navigation) => {
+		if (navigation.willUnload || !navigation.to?.route.id) return;
+		beginNavigationFeedback();
+	});
+
+	// The layout itself is preserved between routes, so this fires after the
+	// destination DOM has landed without unmounting the composer or shell.
+	afterNavigate(() => {
+		finishNavigationFeedback();
 	});
 
 	// Opening a note from the stream reads as a link — a jump to a different
@@ -98,6 +166,7 @@
 
 		return () => {
 			if (warm !== null) cancelIdleCallback(warm);
+			clearNavigationTimers();
 			subscription.unsubscribe();
 		};
 	});
@@ -113,6 +182,31 @@
 	<meta name="apple-mobile-web-app-title" content="NoteMCP" />
 	<link rel="apple-touch-icon" href="/icons/icon-192.png" />
 </svelte:head>
+
+{#if navigationActive}
+	<div
+		class="navigation-progress"
+		role="progressbar"
+		aria-label="Loading page"
+		aria-valuemin="0"
+		aria-valuemax="100"
+		aria-valuenow={Math.round(navigationProgress)}
+	>
+		<div
+			class="navigation-progress__bar"
+			style={`transform: scaleX(${navigationProgress / 100})`}
+		></div>
+	</div>
+{/if}
+
+{#if navigationSlow}
+	<div class="navigation-interstitial" role="status" aria-live="polite" aria-busy="true">
+		<div class="navigation-interstitial__content">
+			<span class="navigation-interstitial__spinner" aria-hidden="true"></span>
+			<span>Loading</span>
+		</div>
+	</div>
+{/if}
 
 {@render children()}
 
