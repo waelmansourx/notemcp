@@ -4,6 +4,7 @@ export interface Tag {
 }
 
 export type TranscriptionStatus = 'pending' | 'processing' | 'complete' | 'failed';
+export type SyncStatus = 'local' | 'synced';
 
 export interface VoiceNote {
 	/** Null only while a freshly recorded blob is still being copied to R2. */
@@ -24,6 +25,9 @@ export interface Note {
 	/** The id the capturing client generated, when there was one. Lets a
 	 *  locally-queued note be matched to its saved row without guessing. */
 	client_id?: string | null;
+	/** Browser-only lifecycle state for optimistic captures. Server-loaded
+	 *  notes omit it and are therefore treated as already synced. */
+	sync_status?: SyncStatus;
 	title: string;
 	content_markdown: string;
 	source_url: string | null;
