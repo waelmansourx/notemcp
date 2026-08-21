@@ -1,6 +1,6 @@
 begin;
 
-select plan(13);
+select plan(14);
 
 create temp table p2_fixture (
   user_id uuid,
@@ -97,6 +97,17 @@ select is(
   jsonb_array_length(public.mcp_list_pending_embeddings(token, 200)),
   2,
   'new notes are listed for lazy embedding backfill'
+)
+from p2_fixture;
+
+select is(
+  public.mcp_search_notes(
+    p_token => token,
+    p_has_photos => true,
+    p_limit => 10
+  )->0->>'id',
+  note_a::text,
+  'photo discovery includes an owned note with a retrievable source thumbnail'
 )
 from p2_fixture;
 

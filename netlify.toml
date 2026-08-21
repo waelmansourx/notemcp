@@ -9,3 +9,7 @@ NODE_VERSION = "22"
 # Keep sharp and its explicitly pinned Linux runtime as external packages so
 # Netlify copies their native binaries instead of partially bundling them.
 external_node_modules = ["sharp", "@img/sharp-linux-x64", "@img/sharp-libvips-linux-x64"]
+# Dynamic imports are not always included in function dependency tracing.
+# Explicit globs guarantee the native addon and libvips payload are present in
+# the deployed Lambda that serves get_note_asset.
+included_files = ["node_modules/sharp/**", "node_modules/@img/sharp-linux-x64/**", "node_modules/@img/sharp-libvips-linux-x64/**"]

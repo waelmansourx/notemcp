@@ -10,6 +10,7 @@ import {
 import {
 	GET_NOTE_ASSET_INPUT_SCHEMA,
 	NOTE_ASSET_OUTPUT_SCHEMA,
+	NoteAssetError,
 	loadNoteAsset,
 	noteAssetDescriptorErrorMessage,
 	noteAssetDescriptorRpcArgs,
@@ -184,7 +185,8 @@ const TOOLS = [
 				},
 				has_photos: {
 					type: 'boolean',
-					description: 'Whether the note body contains an embedded or uploaded image.'
+					description:
+						'Whether the note has a body attachment or a retrievable link-preview thumbnail.'
 				},
 				created_after: {
 					type: 'string',
@@ -555,6 +557,12 @@ async function callTool(
 			try {
 				loaded = await loadNoteAsset(descriptor, request.maxSize);
 			} catch (error) {
+				console.error('get_note_asset failed', {
+					noteId: request.id,
+					asset: request.asset,
+					code: error instanceof NoteAssetError ? error.code : 'unexpected',
+					error
+				});
 				return toolResult(name, { error: noteAssetErrorMessage(error, request.asset) }, true);
 			}
 			return imageToolResult(

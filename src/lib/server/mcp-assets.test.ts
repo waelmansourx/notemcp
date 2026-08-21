@@ -12,6 +12,7 @@ import {
 	noteAssetDescriptorRpcArgs,
 	noteAssetErrorMessage,
 	parseNoteAssetRequest,
+	pinnedLookupFor,
 	validateDecodedAsset
 } from './mcp-assets';
 import { imageToolResult } from './mcp-presentation';
@@ -141,6 +142,19 @@ describe('MCP asset SSRF address checks', () => {
 });
 
 describe('remote MCP asset validation', () => {
+	test('honors the Node 22 all-addresses lookup callback shape while pinning one vetted IP', () => {
+		const lookup = pinnedLookupFor(PUBLIC_ADDRESS) as any;
+		lookup('images.example', { all: true }, (error: Error | null, addresses: unknown) => {
+			expect(error).toBeNull();
+			expect(addresses).toEqual([{ address: PUBLIC_ADDRESS, family: 4 }]);
+		});
+		lookup('images.example', {}, (error: Error | null, address: unknown, family: unknown) => {
+			expect(error).toBeNull();
+			expect(address).toBe(PUBLIC_ADDRESS);
+			expect(family).toBe(4);
+		});
+	});
+
 	test('rejects HTML, JSON and executable responses as unsupported content', async () => {
 		for (const contentType of ['text/html', 'application/json', 'application/octet-stream']) {
 			const result = fetchRemoteAssetImage('https://images.example/not-an-image', {
@@ -281,6 +295,9 @@ describe('MCP asset client errors', () => {
 	test('treats expired CDN responses as a normal unavailable-preview condition', () => {
 		expect(noteAssetErrorMessage(new NoteAssetError('unavailable'), 'source')).toBe(
 			'Source preview is no longer available for this note.'
+		);
+		expect(noteAssetErrorMessage(new NoteAssetError('processor_unavailable'), 'body')).toBe(
+			'Note image processing is temporarily unavailable.'
 		);
 	});
 });

@@ -105,6 +105,7 @@ export type NoteAssetErrorCode =
 	| 'download_too_large'
 	| 'decoded_too_large'
 	| 'encoded_too_large'
+	| 'processor_unavailable'
 	| 'invalid_descriptor';
 
 export class NoteAssetError extends Error {
@@ -282,12 +283,31 @@ async function safeRemoteTarget(
 	return { url, address };
 }
 
+export function pinnedLookupFor(resolvedAddress: string): LookupFunction {
+	const family = isIP(resolvedAddress);
+	// Node 22 enables automatic family selection and calls custom lookup
+	// functions with `{ all: true }`. In that mode the callback must receive
+	// an array of address records; returning the older single-address shape
+	// makes Node fail with `results.sort is not a function` before opening a
+	// socket. Keep the vetted address pinned while honoring both callback
+	// contracts.
+	return ((_hostname: string, options: unknown, callback: (...args: any[]) => void) => {
+		if (
+			typeof options === 'object' &&
+			options !== null &&
+			'all' in options &&
+			options.all === true
+		) {
+			callback(null, [{ address: resolvedAddress, family }]);
+			return;
+		}
+		callback(null, resolvedAddress, family);
+	}) as LookupFunction;
+}
+
 function pinnedHttpsRequest(url: URL, resolvedAddress: string): Promise<Response> {
 	return new Promise((resolve, reject) => {
-		const family = isIP(resolvedAddress);
-		const pinnedLookup: LookupFunction = (_hostname, _options, callback) => {
-			callback(null, resolvedAddress, family);
-		};
+		const pinnedLookup = pinnedLookupFor(resolvedAddress);
 		let settled = false;
 		const request = httpsRequest(
 			url,
@@ -518,6 +538,8 @@ export function noteAssetErrorMessage(error: unknown, asset: 'source' | 'body'):
 			return `${label} exceeds the ${NOTE_ASSET_LIMITS.decodedPixels / 1_000_000} megapixel decode limit.`;
 		case 'encoded_too_large':
 			return `${label} could not be reduced below the ${NOTE_ASSET_LIMITS.finalEncodedBytes / 1024 / 1024} MiB response limit.`;
+		case 'processor_unavailable':
+			return `${label} processing is temporarily unavailable.`;
 		case 'invalid_descriptor':
 			return `${label} could not be loaded.`;
 	}
@@ -543,6 +565,16 @@ export function validateDecodedAsset(metadata: DecodedImageMetadata): {
 	return { format, width, height };
 }
 
+async function loadSharp() {
+	try {
+		// sharp 0.35 ships declarations but omits the `types` export condition.
+		// @ts-expect-error upstream package exports do not expose lib/index.d.ts
+		return (await import('sharp')).default;
+	} catch {
+		throw new NoteAssetError('processor_unavailable');
+	}
+}
+
 export async function normalizeAssetImage(
 	original: Uint8Array,
 	maxSize: number
@@ -550,9 +582,7 @@ export async function normalizeAssetImage(
 	// Sharp is a native optional dependency. Loading it at module scope makes a
 	// missing Netlify/libvips binary crash the entire MCP route, including tools
 	// that never touch images. Keep that failure isolated to get_note_asset.
-	// sharp 0.35 ships declarations but omits the `types` export condition.
-	// @ts-expect-error upstream package exports do not expose lib/index.d.ts
-	const { default: sharp } = await import('sharp');
+	const sharp = await loadSharp();
 
 	try {
 		const metadata = await sharp(original, {
@@ -610,8 +640,7 @@ export async function loadNoteAsset(
 				NOTE_ASSET_LIMITS.finalEncodedBytes,
 				'encoded_too_large'
 			);
-			// @ts-expect-error upstream package exports do not expose lib/index.d.ts
-			const { default: sharp } = await import('sharp');
+			const sharp = await loadSharp();
 			const metadata = validateDecodedAsset(
 				await sharp(cachedBytes, {
 					limitInputPixels: NOTE_ASSET_LIMITS.decodedPixels,

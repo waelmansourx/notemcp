@@ -1,6 +1,6 @@
 begin;
 
-select plan(11);
+select plan(13);
 
 select is(
   public.mcp_source_domain('https://www.Instagram.com/p/example/'),
@@ -28,6 +28,17 @@ select is(
   public.mcp_has_photos('plain user-authored text'),
   false,
   'plain text is not reported as a photo note'
+);
+
+select ok(
+  public.mcp_has_photos('plain user-authored text', 'https://images.example.com/preview.jpg'),
+  'a retrievable source thumbnail is reported as a photo note'
+);
+
+select is(
+  public.mcp_has_photos('plain user-authored text', 'data:image/png;base64,AAAA'),
+  false,
+  'a hidden legacy source data URL is not advertised as retrievable'
 );
 
 select ok(
