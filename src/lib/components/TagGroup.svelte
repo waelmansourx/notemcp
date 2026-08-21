@@ -1,7 +1,6 @@
 <script lang="ts">
 	import type { Tag, ThreadStub } from '$lib/types';
 	import { relativeTime } from '$lib/dates';
-	import { writeInto } from '$lib/composer.svelte';
 	import { tagDisplay } from '$lib/tags';
 
 	let {
@@ -13,15 +12,11 @@
 		tag: Tag;
 		count: number;
 		notes: ThreadStub[];
-		/** Overrides the header text — used for a card nested under its parent,
-		 *  where the levels above are the cards directly overhead and this one
-		 *  only needs its own ("bug", not "notemcp/bug" again). */
 		label?: string;
 	} = $props();
 
-	/** Three to a page. The next page peeks past the right edge, which is the
-	 *  only thing that has to say "there's more" — no "See all" button, no
-	 *  count to read, just a card that is visibly cut off. */
+	let visual = $derived(notes.slice(0, 3).filter((note) => note.image).length >= 2);
+
 	let pages = $derived.by(() => {
 		const out: ThreadStub[][] = [];
 		for (let i = 0; i < notes.length; i += 3) out.push(notes.slice(i, i + 3));
@@ -29,118 +24,63 @@
 	});
 </script>
 
-<!-- A tag remains a useful place with several recognizable previews, but a
-     divider does enough to separate it from the next one. Wrapping every tag
-     in its own filled card made the page read like nested containers. -->
-<section class="border-b py-4" style="border-color: var(--color-border);">
-	<a
-		href={`/?tag=${encodeURIComponent(tag.name)}`}
-		class="flex items-center gap-2 active:opacity-60"
-	>
-		<span class="tag tag-lg min-w-0 truncate">#{label}</span>
-		<span
-			class="shrink-0 text-[0.82rem] font-bold tabular-nums"
-			style="color: var(--color-ink-faint);">{count}</span
-		>
+<section class="border-b py-3.5" style="border-color: var(--color-border);">
+	<div class="flex items-baseline gap-2.5">
+		<a href={`/?tag=${encodeURIComponent(tag.name)}`} class="min-w-0 active:opacity-60">
+			<span class="tag tag-lg block truncate"><span style="color: #c8c0b0; font-weight: 400;">#</span>{label}</span>
+		</a>
 		<span class="flex-1"></span>
-		<span
-			class="grid h-6 w-6 shrink-0 place-items-center"
-			style="color: var(--color-ink-muted);"
-			aria-hidden="true"
+		<a
+			href={`/?tag=${encodeURIComponent(tag.name)}`}
+			class="shrink-0 text-[0.72rem] active:opacity-60"
+			style="color: var(--color-ink-faint);"
 		>
-			<svg
-				width="12"
-				height="12"
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				stroke-width="3"
-				stroke-linecap="round"
-				stroke-linejoin="round"><path d="m9 5 7 7-7 7" /></svg
-			>
-		</span>
-	</a>
-
-	<div
-		class="mt-1.5 flex snap-x snap-mandatory gap-3 overflow-x-auto"
-		style="scrollbar-width: none;"
-	>
-		{#each pages as pageNotes, i (i)}
-			<div class="shrink-0 snap-start" style="width: {pages.length > 1 ? '89%' : '100%'};">
-				{#each pageNotes as note (note.id)}
-					<div class="flex items-center gap-3 py-1.5">
-						<a
-							href={`/note/${note.id}`}
-							class="flex min-w-0 flex-1 items-center gap-3 active:opacity-60"
-						>
-							{#if note.image}
-								<img
-									src={note.image}
-									alt=""
-									loading="lazy"
-									class="h-[52px] w-[52px] shrink-0 rounded-[15px] object-cover"
-									style="background: var(--color-surface);"
-								/>
-							{:else}
-								<span
-									class="grid h-[52px] w-[52px] shrink-0 place-items-center rounded-[15px] font-serif text-[1.15rem] font-semibold"
-									style="background: var(--color-surface); color: var(--color-accent);"
-									aria-hidden="true">{note.label.slice(0, 1).toUpperCase()}</span
-								>
-							{/if}
-
-							<span class="min-w-0 flex-1">
-								<span
-									class="line-clamp-2 text-[0.88rem] leading-[1.28] font-semibold tracking-[-0.015em]"
-									>{note.label}</span
-								>
-								<!-- Two facts, never more. The App Store row can carry a
-								     rating, a size and a price because you're comparing
-								     things; you're not comparing your own notes. -->
-								<span class="mt-1 flex items-center gap-1.5">
-									{#if note.source}
-										<span
-											class="truncate text-[0.68rem] font-bold"
-											style="color: var(--color-ink-muted);">{note.source}</span
-										>
-									{/if}
-									{#if note.count > 0}
-										<span
-											class="shrink-0 text-[0.68rem] font-bold whitespace-nowrap"
-											style="color: var(--color-accent);">{note.count} more</span
-										>
-									{:else}
-										<span
-											class="shrink-0 text-[0.68rem] font-bold"
-											style="color: var(--color-ink-faint);">{relativeTime(note.at)}</span
-										>
-									{/if}
-								</span>
-							</span>
-						</a>
-
-						<!-- Where the App Store puts "View", because that's where your
-						     thumb already is. Different verb: this one writes. -->
-						<button
-							type="button"
-							aria-label={`Add a thought to "${note.label}"`}
-							class="grid h-[30px] w-[30px] shrink-0 place-items-center active:scale-90"
-							style="color: var(--color-accent);"
-							onclick={() => writeInto(note)}
-						>
-							<svg
-								width="14"
-								height="14"
-								viewBox="0 0 24 24"
-								fill="none"
-								stroke="currentColor"
-								stroke-width="3"
-								stroke-linecap="round"><path d="M12 5v14M5 12h14" /></svg
-							>
-						</button>
-					</div>
-				{/each}
-			</div>
-		{/each}
+			{count > 3 ? 'See all' : 'Open'}
+		</a>
 	</div>
+
+	{#if visual}
+		<div class="-mr-[26px] mt-3 flex gap-3 overflow-x-auto pr-[26px]" style="scrollbar-width: none;">
+			{#each notes as note (note.id)}
+				<a href={`/note/${note.id}`} class="w-[152px] shrink-0 active:opacity-65">
+					{#if note.image}
+						<img
+							src={note.image}
+							alt=""
+							loading="lazy"
+							class="h-[96px] w-[152px] rounded-[12px] object-cover"
+							style="background: var(--color-surface-2);"
+						/>
+					{:else}
+						<div
+							class="grid h-[96px] w-[152px] place-items-center rounded-[12px] font-serif text-[1.4rem]"
+							style="background: var(--color-surface-2); color: var(--color-ink-faint);"
+						>
+							{note.label.slice(0, 1).toUpperCase()}
+						</div>
+					{/if}
+					<p class="mt-2 line-clamp-2 text-[0.78rem] leading-[1.35] font-medium">{note.label}</p>
+					<p class="mt-1 truncate text-[0.66rem]" style="color: var(--color-ink-faint);">
+						{note.source ? `${note.source} · ` : ''}{relativeTime(note.at)}
+					</p>
+				</a>
+			{/each}
+		</div>
+	{:else}
+		<div class="-mr-[26px] mt-2.5 flex snap-x snap-mandatory gap-5 overflow-x-auto pr-[26px]" style="scrollbar-width: none;">
+			{#each pages as pageNotes, i (i)}
+				<div class="w-[316px] shrink-0 snap-start">
+					{#each pageNotes as note, j (note.id)}
+						<a href={`/note/${note.id}`} class="block py-2 active:opacity-60">
+							<p class="line-clamp-2 text-[0.82rem] leading-[1.4]">{note.label}</p>
+							<p class="mt-1 text-[0.66rem]" style="color: var(--color-ink-faint);">{relativeTime(note.at)}</p>
+						</a>
+						{#if j < pageNotes.length - 1}
+							<div class="h-px" style="background: var(--color-border);"></div>
+						{/if}
+					{/each}
+				</div>
+			{/each}
+		</div>
+	{/if}
 </section>
