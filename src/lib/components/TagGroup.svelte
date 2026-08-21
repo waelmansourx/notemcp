@@ -253,10 +253,6 @@
 </section>
 
 <style>
-	.tag-shelf:first-child {
-		padding-top: 0.35rem;
-	}
-
 	.shelf-title {
 		color: var(--color-accent-path);
 		font-size: 1.68rem;
