@@ -2,7 +2,7 @@
 	import type { Note } from '$lib/types';
 	import { timeOfDay, hostname, streamDate, relativeTime } from '$lib/dates';
 	import { firstLine, snippet, excerpt, extractLeadingImage } from '$lib/markdown';
-	import { isPending } from '$lib/stream.svelte';
+	import { isPending, noteKey } from '$lib/stream.svelte';
 	import { lastActivity, stubOf } from '$lib/thread';
 	import { writeInto } from '$lib/composer.svelte';
 	import { keepSelection } from '$lib/selection';
@@ -31,6 +31,7 @@
 		<VoiceNote
 			noteId={note.id}
 			{voice}
+			pending={queued}
 			href={queued ? null : `/note/${note.id}`}
 			class={body ? 'mb-3' : ''}
 		/>
@@ -192,7 +193,7 @@
 
 		{#if expanded}
 			<div class="mt-4 space-y-5">
-				{#each thoughts as thought (thought.id)}
+				{#each thoughts as thought (noteKey(thought))}
 					<Thought
 						note={thought}
 						href={isPending(thought) ? null : `/note/${thought.id}`}
