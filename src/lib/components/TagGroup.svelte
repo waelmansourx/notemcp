@@ -19,7 +19,6 @@
 	let loadingMore = $state(false);
 	let exhausted = $state(initialNotes.length >= count);
 
-	let visual = $derived(notes.some((note) => Boolean(note.image)));
 	let pages = $derived.by(() => {
 		const out: ThreadStub[][] = [];
 		for (let i = 0; i < notes.length; i += 3) out.push(notes.slice(i, i + 3));
@@ -70,73 +69,62 @@
 		{/if}
 	</div>
 
-	{#if visual}
-		<div class="shelf-scroll mt-3 flex max-w-full gap-3 overflow-x-auto pb-1" onscroll={onShelfScroll}>
-			{#each notes as note (note.id)}
-				<a href={`/note/${note.id}`} class="w-[152px] max-w-[44vw] shrink-0 active:opacity-65">
-					<div
-						class="relative aspect-[19/12] w-full overflow-hidden rounded-[14px]"
-						style="background: var(--color-surface-2);"
+	<div class="shelf-scroll mt-2.5 flex max-w-full gap-5 overflow-x-auto pb-1" onscroll={onShelfScroll}>
+		{#each pages as pageNotes, i (i)}
+			<div class="w-[min(330px,90vw)] shrink-0">
+				{#each pageNotes as note, j (note.id)}
+					<a
+						href={`/note/${note.id}`}
+						class="flex min-h-[78px] items-center gap-3 py-2 active:opacity-60"
 					>
-						{#if note.image}
-							<!-- Use the image itself as the card's ambient color. Keep it much
-							     more saturated/visible than the foreground blend so portrait and
-							     square sources feel intentional rather than sitting in a dull box. -->
-							<img
-								src={note.image}
-								alt=""
-								loading="lazy"
-								aria-hidden="true"
-								class="absolute inset-0 h-full w-full scale-125 object-cover blur-lg opacity-75"
-								style="filter: blur(14px) saturate(1.75) contrast(1.08);"
-							/>
-							<div
-								class="absolute inset-0"
-								style="background: color-mix(in srgb, var(--color-surface-2) 12%, transparent);"
-							></div>
-							<img
-								src={note.image}
-								alt=""
-								loading="lazy"
-								class="relative z-10 h-full w-full object-contain object-center"
-							/>
-						{:else}
-							<div
-								class="grid h-full w-full place-items-center font-serif text-[1.4rem]"
-								style="color: var(--color-ink-faint);"
-							>
-								{note.label.slice(0, 1).toUpperCase()}
-							</div>
-						{/if}
-					</div>
-					<p class="mt-2 line-clamp-2 text-[0.78rem] leading-[1.35] font-medium">{note.label}</p>
-					<p class="mt-1 truncate text-[0.66rem]" style="color: var(--color-ink-faint);">
-						{note.source ? `${note.source} · ` : ''}{relativeTime(note.at)}
-					</p>
-				</a>
-			{/each}
-			{#if loadingMore}
-				<div class="w-8 shrink-0" aria-label="Loading more notes"></div>
-			{/if}
-		</div>
-	{:else}
-		<div class="shelf-scroll mt-2.5 flex max-w-full gap-5 overflow-x-auto pb-1" onscroll={onShelfScroll}>
-			{#each pages as pageNotes, i (i)}
-				<div class="w-[min(316px,88vw)] shrink-0">
-					{#each pageNotes as note, j (note.id)}
-						<a href={`/note/${note.id}`} class="block py-2 active:opacity-60">
-							<p class="line-clamp-2 text-[0.82rem] leading-[1.4]">{note.label}</p>
-							<p class="mt-1 text-[0.66rem]" style="color: var(--color-ink-faint);">{relativeTime(note.at)}</p>
-						</a>
-						{#if j < pageNotes.length - 1}
-							<div class="h-px" style="background: var(--color-border);"></div>
-						{/if}
-					{/each}
-				</div>
-			{/each}
-			{#if loadingMore}
-				<div class="w-8 shrink-0" aria-label="Loading more notes"></div>
-			{/if}
-		</div>
-	{/if}
+						<div
+							class="relative h-[62px] w-[82px] shrink-0 overflow-hidden rounded-[12px]"
+							style="background: var(--color-surface-2);"
+						>
+							{#if note.image}
+								<img
+									src={note.image}
+									alt=""
+									loading="lazy"
+									aria-hidden="true"
+									class="absolute inset-0 h-full w-full scale-125 object-cover blur-md opacity-70"
+									style="filter: blur(10px) saturate(1.55) contrast(1.05);"
+								/>
+								<div
+									class="absolute inset-0"
+									style="background: color-mix(in srgb, var(--color-surface-2) 16%, transparent);"
+								></div>
+								<img
+									src={note.image}
+									alt=""
+									loading="lazy"
+									class="relative z-10 h-full w-full object-contain object-center"
+								/>
+							{:else}
+								<div
+									class="grid h-full w-full place-items-center font-serif text-[1.25rem]"
+									style="color: var(--color-ink-faint);"
+								>
+									{note.label.slice(0, 1).toUpperCase()}
+								</div>
+							{/if}
+						</div>
+
+						<div class="min-w-0 flex-1">
+							<p class="line-clamp-2 text-[0.82rem] leading-[1.38]">{note.label}</p>
+							<p class="mt-1 truncate text-[0.66rem]" style="color: var(--color-ink-faint);">
+								{note.source ? `${note.source} · ` : ''}{relativeTime(note.at)}
+							</p>
+						</div>
+					</a>
+					{#if j < pageNotes.length - 1}
+						<div class="h-px ml-[94px]" style="background: var(--color-border);"></div>
+					{/if}
+				{/each}
+			</div>
+		{/each}
+		{#if loadingMore}
+			<div class="w-8 shrink-0" aria-label="Loading more notes"></div>
+		{/if}
+	</div>
 </section>
