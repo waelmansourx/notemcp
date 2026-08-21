@@ -6,6 +6,8 @@ import { previewImageFor } from '$lib/preview-image';
 
 const PREVIEW_SELECT =
 	'id, title, source_title, source_image, source_url, preview_image, updated_at, thread_count, preview, note_tags(tags(id, name))';
+const LEGACY_PREVIEW_SELECT =
+	'id, title, source_title, source_image, source_url, updated_at, thread_count, preview, note_tags(tags(id, name))';
 
 function label(row: any): string {
 	const raw = (row.source_title || row.title || row.preview || '').replace(/\s+/g, ' ').trim();
@@ -66,19 +68,22 @@ export const GET: RequestHandler = async ({ url, locals: { supabase, user } }) =
 	const noteIds = [...new Set((links ?? []).map((link: any) => link.note_id))];
 	if (noteIds.length === 0) return json({ notes: [], total: 0, hasMore: false });
 
-	const { data: rows, count, error: queryError } = await supabase
-		.from('notes')
-		.select(PREVIEW_SELECT, { count: 'exact' })
-		.eq('user_id', user.id)
-		.is('deleted_at', null)
-		.eq('archived', false)
-		.in('id', noteIds)
-		.order('updated_at', { ascending: false })
-		.range(offset, offset + limit - 1);
+	const queryNotes = (select: string) =>
+		supabase
+			.from('notes')
+			.select(select, { count: 'exact' })
+			.eq('user_id', user.id)
+			.is('deleted_at', null)
+			.eq('archived', false)
+			.in('id', noteIds)
+			.order('updated_at', { ascending: false })
+			.range(offset, offset + limit - 1);
 
-	if (queryError) throw error(500, 'Could not load tag notes');
+	let result = await queryNotes(PREVIEW_SELECT);
+	if (result.error) result = await queryNotes(LEGACY_PREVIEW_SELECT);
+	if (result.error) throw error(500, 'Could not load tag notes');
 
-	const notes = (rows ?? []).map(stubOf);
-	const total = count ?? offset + notes.length;
+	const notes = (result.data ?? []).map(stubOf);
+	const total = result.count ?? offset + notes.length;
 	return json({ notes, total, hasMore: offset + notes.length < total });
 };
