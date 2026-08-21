@@ -55,9 +55,9 @@
 		if (el.scrollWidth - el.scrollLeft - el.clientWidth < 220) loadMore();
 	}
 
-	// The compact shelves are pages of three rows. A mouse-wheel/trackpad gesture
-	// should move exactly one page rather than leaving the shelf stranded halfway
-	// between columns. Touch dragging remains direct and unmodified.
+	// Compact shelves move as complete three-row pages. Wheel and trackpad
+	// gestures get a short glide; touch remains direct, then snaps to the
+	// nearest complete page when the finger lifts.
 	function onPagedWheel(event: WheelEvent) {
 		const el = event.currentTarget as HTMLElement;
 		const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
@@ -67,7 +67,7 @@
 		wheelUnlockTimer = setTimeout(() => {
 			wheelLocked = false;
 			wheelUnlockTimer = undefined;
-		}, 150);
+		}, 420);
 		if (wheelLocked) {
 			event.preventDefault();
 			return;
@@ -87,21 +87,24 @@
 
 		event.preventDefault();
 		wheelLocked = true;
-		el.scrollTo({ left: next * step, behavior: 'auto' });
+		el.scrollTo({
+			left: next * step,
+			behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'
+		});
 	}
 </script>
 
-<section class="min-w-0 border-b py-3.5" style="border-color: var(--color-border);">
-	<div class="flex min-w-0 items-baseline gap-2.5">
+<section class="tag-shelf min-w-0 py-3">
+	<div class="flex min-w-0 items-baseline gap-3">
 		<a href={`/tags/${encodeURIComponent(tag.name)}`} class="min-w-0 active:opacity-60">
-			<span class="tag tag-lg block truncate"><span style="color: #c8c0b0; font-weight: 400;">#</span>{label}</span>
+			<span class="tag tag-lg shelf-title block truncate"><span class="shelf-hash">#</span>{label}</span>
 		</a>
 		<span class="flex-1"></span>
 		{#if count > 3}
 			<a
 				href={`/tags/${encodeURIComponent(tag.name)}`}
-				class="shrink-0 text-[0.72rem] active:opacity-60"
-				style="color: var(--color-ink-faint);"
+				class="shrink-0 text-[0.74rem] font-medium active:opacity-60"
+				style="color: var(--color-accent-path);"
 			>
 				See all
 			</a>
@@ -111,12 +114,18 @@
 	{#if featured}
 		<!-- The freshest tag gets the visual shelf: one large thumbnail card per
 		     note, as before. Only this first/top tag uses this treatment. -->
-		<div class="shelf-scroll mt-3 flex max-w-full gap-3 overflow-x-auto pb-1" onscroll={onShelfScroll}>
+		<div
+			class="shelf-scroll -mx-[22px] mt-2.5 flex w-[calc(100%+44px)] max-w-none gap-3.5 overflow-x-auto px-[22px] pb-1 lg:mx-0 lg:w-full lg:px-0"
+			onscroll={onShelfScroll}
+		>
 			{#each notes as note (note.id)}
-				<a href={`/note/${note.id}`} class="w-[152px] max-w-[44vw] shrink-0 active:opacity-65">
+				<a
+					href={`/note/${note.id}`}
+					class="w-[calc(50vw-35px)] max-w-[172px] shrink-0 active:opacity-65 lg:w-[168px]"
+				>
 					<div
-						class="relative aspect-[19/12] w-full overflow-hidden rounded-[14px]"
-						style="background: var(--color-surface-2);"
+						class="relative aspect-[4/3] w-full overflow-hidden rounded-[16px]"
+						style="background: var(--color-surface-2); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-border) 70%, transparent);"
 					>
 						{#if note.image}
 							<img
@@ -129,7 +138,7 @@
 							/>
 							<div
 								class="absolute inset-0"
-								style="background: color-mix(in srgb, var(--color-surface-2) 12%, transparent);"
+								style="background: color-mix(in srgb, var(--color-surface-2) 5%, transparent);"
 							></div>
 							<img
 								src={note.image}
@@ -146,10 +155,21 @@
 							</div>
 						{/if}
 					</div>
-					<p class="mt-2 line-clamp-2 text-[0.78rem] leading-[1.35] font-medium">{note.label}</p>
-					<p class="mt-1 truncate text-[0.66rem]" style="color: var(--color-ink-faint);">
-						{note.source ? `${note.source} · ` : ''}{relativeTime(note.at)}
+					<p
+						class="mt-2 line-clamp-2 text-[0.82rem] leading-[1.38] font-medium"
+						style="color: var(--color-ink);"
+					>
+						{note.label}
 					</p>
+					<div
+						class="mt-1 flex min-w-0 items-center gap-1.5 truncate text-[0.66rem]"
+						style="color: var(--color-ink-faint);"
+					>
+						{#if note.source}
+							<span class="source-label min-w-0 truncate">{note.source}</span>
+						{/if}
+						<span class="shrink-0">{relativeTime(note.at)}</span>
+					</div>
 				</a>
 			{/each}
 			{#if loadingMore}
@@ -158,19 +178,21 @@
 		</div>
 	{:else}
 		<div
-			class="shelf-scroll mt-2.5 flex max-w-full gap-5 overflow-x-auto pb-1"
+			class="shelf-scroll shelf-paged -mx-[22px] mt-2 flex w-[calc(100%+44px)] max-w-none gap-4 overflow-x-auto px-[22px] py-1 lg:mx-0 lg:w-full lg:px-0"
 			onscroll={onShelfScroll}
 			onwheel={onPagedWheel}
 		>
 			{#each pages as pageNotes, i (i)}
-				<div data-shelf-page class="w-[min(330px,90vw)] shrink-0">
-					{#each pageNotes as note, j (note.id)}
+				<div data-shelf-page class="w-[min(316px,82vw)] shrink-0">
+					{#each pageNotes as note (note.id)}
 						<a
 							href={`/note/${note.id}`}
-							class="flex min-h-[78px] items-center gap-3 py-2 active:opacity-60"
+							class="flex min-h-[70px] items-center gap-2.5 py-1.5 active:opacity-60"
 						>
 							<div
-								class="relative h-[62px] w-[82px] shrink-0 overflow-hidden rounded-[12px]"
+								class="relative shrink-0 overflow-hidden rounded-[11px] {note.image
+									? 'h-[58px] w-[76px]'
+									: 'h-[52px] w-[52px]'}"
 								style="background: var(--color-surface-2);"
 							>
 								{#if note.image}
@@ -184,7 +206,7 @@
 									/>
 									<div
 										class="absolute inset-0"
-										style="background: color-mix(in srgb, var(--color-surface-2) 16%, transparent);"
+										style="background: color-mix(in srgb, var(--color-surface-2) 6%, transparent);"
 									></div>
 									<img
 										src={note.image}
@@ -195,7 +217,7 @@
 								{:else}
 									<div
 										class="grid h-full w-full place-items-center font-serif text-[1.25rem]"
-										style="color: var(--color-ink-faint);"
+										style="color: var(--color-accent-path);"
 									>
 										{note.label.slice(0, 1).toUpperCase()}
 									</div>
@@ -203,15 +225,23 @@
 							</div>
 
 							<div class="min-w-0 flex-1">
-								<p class="line-clamp-2 text-[0.82rem] leading-[1.38]">{note.label}</p>
-								<p class="mt-1 truncate text-[0.66rem]" style="color: var(--color-ink-faint);">
-									{note.source ? `${note.source} · ` : ''}{relativeTime(note.at)}
+								<p
+									class="line-clamp-2 text-[0.84rem] leading-[1.38] font-medium"
+									style="color: var(--color-ink-2);"
+								>
+									{note.label}
 								</p>
+								<div
+									class="mt-1 flex min-w-0 items-center gap-1.5 truncate text-[0.65rem]"
+									style="color: var(--color-ink-faint);"
+								>
+									{#if note.source}
+										<span class="source-label min-w-0 truncate">{note.source}</span>
+									{/if}
+									<span class="shrink-0">{relativeTime(note.at)}</span>
+								</div>
 							</div>
 						</a>
-						{#if j < pageNotes.length - 1}
-							<div class="h-px ml-[94px]" style="background: var(--color-border);"></div>
-						{/if}
 					{/each}
 				</div>
 			{/each}
@@ -221,3 +251,56 @@
 		</div>
 	{/if}
 </section>
+
+<style>
+	.shelf-title {
+		color: var(--color-accent-path);
+		font-size: 1.68rem;
+		font-weight: 560;
+		letter-spacing: -0.02em;
+	}
+
+	.shelf-hash {
+		color: color-mix(in srgb, var(--color-accent-path) 42%, var(--color-bg));
+		font-weight: 400;
+	}
+
+	.shelf-paged {
+		scroll-behavior: smooth;
+		scroll-snap-type: x mandatory;
+		scroll-padding-inline: 22px;
+	}
+
+	.shelf-paged [data-shelf-page] {
+		scroll-snap-align: start;
+		scroll-snap-stop: always;
+	}
+
+	.source-label {
+		max-width: 9.5rem;
+		border-radius: 999px;
+		padding: 0.1rem 0.38rem;
+		background: color-mix(in srgb, var(--color-success-soft) 76%, transparent);
+		color: var(--color-accent-path);
+		font-weight: 650;
+		letter-spacing: -0.01em;
+	}
+
+	@media (min-width: 64rem) {
+		.shelf-paged {
+			scroll-padding-inline: 0;
+		}
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.shelf-paged {
+			scroll-behavior: auto;
+		}
+	}
+
+	@media (prefers-color-scheme: dark) {
+		.shelf-hash {
+			color: color-mix(in srgb, var(--color-accent-path) 54%, var(--color-bg));
+		}
+	}
+</style>
