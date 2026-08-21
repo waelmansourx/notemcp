@@ -4,7 +4,7 @@
 	import favicon from '$lib/assets/favicon.svg';
 	import { onMount } from 'svelte';
 	import { invalidate, onNavigate } from '$app/navigation';
-	import { browser } from '$app/environment';
+	import { browser, dev } from '$app/environment';
 	import { flushOutbox, flushEdits } from '$lib/outbox';
 	import { setSuggestions } from '$lib/cache.svelte';
 	import { clearCache } from '$lib/cache';
@@ -52,7 +52,10 @@
 		});
 	});
 
-	if (browser) {
+	// The production worker is generated during the build. Registering that
+	// virtual entry in Vite's dev server only produces a broken worker and an
+	// unhandled console rejection; HMR already owns local updates.
+	if (browser && !dev) {
 		import('virtual:pwa-register/svelte').then(({ useRegisterSW }) => {
 			useRegisterSW({ immediate: true });
 		});
@@ -71,7 +74,7 @@
 				setSuggestions([]);
 			}
 
-			if (session?.expires_at !== data.session?.expires_at) {
+			if (session?.expires_at !== data.authExpiresAt) {
 				invalidate('supabase:auth');
 			}
 		});

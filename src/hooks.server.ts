@@ -33,11 +33,10 @@ const supabase: Handle = async ({ event, resolve }) => {
 		if (error || !data) return { session: null, user: null };
 
 		const claims = data.claims;
+		if (typeof claims.sub !== 'string') return { session: null, user: null };
 		const user = {
-			...session.user,
-			id: claims.sub!,
-			email: claims.email ?? session.user.email,
-			role: claims.role ?? session.user.role
+			id: claims.sub,
+			email: typeof claims.email === 'string' ? claims.email : undefined
 		};
 
 		return { session, user };

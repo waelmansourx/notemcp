@@ -7,7 +7,7 @@
 	import { queueNote, syncEntryNow } from '$lib/outbox';
 	import { addPending, removePending } from '$lib/stream.svelte';
 	import { continuation, detach, restore, touch } from '$lib/composer.svelte';
-	import { beginMediaUpload } from '$lib/media';
+	import { beginMediaUpload, compressImage, type PendingMedia } from '$lib/media';
 	import { suggestions } from '$lib/cache.svelte';
 	import { QUICK_TAGS } from '$lib/types';
 	import { fly, fade } from 'svelte/transition';
@@ -15,12 +15,14 @@
 
 	const SHARE_CACHE = 'notemcp-share-v1';
 	const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
+	const MAX_SOURCE_IMAGE_BYTES = 25 * 1024 * 1024;
+	const MAX_IMAGES = 10;
 
 	const params = page.url.searchParams;
 	const rawTitle = params.get('title') ?? '';
 	const rawText = params.get('text') ?? '';
 	const rawUrl = params.get('url') ?? '';
-	const sharedId = params.get('shared');
+	const sharedIds = params.getAll('shared');
 
 	const urlRegex = /https?:\/\/\S+/i;
 	const foundUrl = rawUrl || rawText.match(urlRegex)?.[0] || rawTitle.match(urlRegex)?.[0] || '';
@@ -35,7 +37,7 @@
 	let fetchedImage = $state<string | null>(null);
 	let previewLoading = $state(false);
 
-	// A shared screenshot/photo, pulled out of Cache Storage where the
+	// Shared screenshots/photos, pulled out of Cache Storage where the
 	// service worker stashed it (see src/service-worker.ts) and uploaded to
 	// R2 in the background (see ADR-001). sharedImageDataUrl is a local
 	// preview only — never written into the saved note, which instead gets
@@ -43,16 +45,29 @@
 	// resolves. If sharing happens with genuinely no connection, that
 	// request never resolves either, and the note saves as text-only rather
 	// than embedding the raw bytes.
-	let sharedImageDataUrl = $state<string | null>(null);
-	let sharedImageMediaId = $state<string | null>(null);
-	let sharedImageUploadStart: ReturnType<typeof beginMediaUpload> | null = null;
-	let sharedImageTooLarge = $state(false);
-	let sharedImageLoading = $state(!!sharedId);
+	type SharedImage = {
+		key: string;
+		dataUrl: string;
+		mediaId: string | null;
+		uploadStart: Promise<PendingMedia> | null;
+		uploadError: boolean;
+		processing: boolean;
+	};
+	let sharedImages = $state<SharedImage[]>([]);
+	let sharedImageError = $state<string | null>(null);
+	let sharedImageLoading = $state(sharedIds.length > 0);
+	let sharedImageDragging = $state(false);
+	let sharedImageInput = $state<HTMLInputElement | null>(null);
+	const sharedImagePreparations = new Set<Promise<void>>();
 
 	let fallbackTitle = $derived(
 		rawTitle ||
 			leftoverText ||
-			(sourceUrl ? hostname(sourceUrl) : sharedId ? 'Shared image' : 'Shared item')
+			(sourceUrl
+				? hostname(sourceUrl)
+				: sharedIds.length || sharedImages.length
+					? 'Shared image'
+					: 'Shared item')
 	);
 	let fallbackSubtext = $derived(
 		leftoverText && leftoverText !== fallbackTitle ? leftoverText : ''
@@ -68,9 +83,10 @@
 
 	// Focus the caption the instant the sheet mounts rather than waiting on
 	// its entrance transition — the sheet is already visible enough to type
-	// into well before it finishes sliding up. The onintroend re-focus below
-	// stays as a backstop for Android, where a caret that appears mid-slide
-	// sometimes doesn't bring the IME with it.
+	// into well before it finishes sliding up. The native `autofocus` on the
+	// field gives the browser the same intent before this component hydrates;
+	// the onintroend re-focus below stays as a backstop for Android, where a
+	// caret that appears mid-slide sometimes doesn't bring the IME with it.
 	onMount(() => {
 		captionEl?.focus();
 	});
@@ -120,41 +136,19 @@
 				});
 		}
 
-		if (sharedId) {
+		if (sharedIds.length > 0) {
 			(async () => {
 				try {
 					const cache = await caches.open(SHARE_CACHE);
-					const key = `/__share/${sharedId}`;
-					const res = await cache.match(key);
-					if (!res) return;
-					const blob = await res.blob();
-					await cache.delete(key);
-					if (blob.size > MAX_IMAGE_BYTES) {
-						sharedImageTooLarge = true;
-						return;
-					}
-					sharedImageDataUrl = await new Promise<string>((resolve, reject) => {
-						const reader = new FileReader();
-						reader.onload = () => resolve(reader.result as string);
-						reader.onerror = reject;
-						reader.readAsDataURL(blob);
-					});
-
-					// Best-effort — if signing fails (offline, R2 down), there's no
-					// id to embed and save() proceeds without the image rather
-					// than falling back to a base64 embed.
-					const started = beginMediaUpload(blob, 'image');
-					sharedImageUploadStart = started;
-					started
-						.then(({ id, whenUploaded }) => {
-							sharedImageMediaId = id;
-							whenUploaded.catch(() => {
-								// Never landed in R2 — don't leave a permanently broken
-								// ref in the note if it hasn't been saved yet.
-								if (sharedImageMediaId === id) sharedImageMediaId = null;
-							});
+					const blobs = await Promise.all(
+						sharedIds.map(async (id) => {
+							const key = `/__share/${id}`;
+							const res = await cache.match(key);
+							await cache.delete(key);
+							return res?.blob() ?? null;
 						})
-						.catch(() => {});
+					);
+					attachSharedImages(blobs.filter((blob): blob is Blob => blob !== null));
 				} catch {
 					// no image ever arrives — just proceed as a text-only capture
 				} finally {
@@ -164,11 +158,137 @@
 		}
 	});
 
+	function dataUrlFor(blob: Blob): Promise<string> {
+		return new Promise((resolve, reject) => {
+			const reader = new FileReader();
+			reader.onload = () => resolve(reader.result as string);
+			reader.onerror = () => reject(reader.error);
+			reader.readAsDataURL(blob);
+		});
+	}
+
+	function imageFilesFrom(data: DataTransfer | null): File[] {
+		if (!data) return [];
+		const files = Array.from(data.files).filter((file) => file.type.startsWith('image/'));
+		if (files.length > 0) return files;
+		return Array.from(data.items)
+			.filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+			.map((item) => item.getAsFile())
+			.filter((file): file is File => file !== null);
+	}
+
+	function attachSharedImages(blobs: Blob[]) {
+		const images = blobs.filter((blob) => blob.type.startsWith('image/'));
+		if (images.length === 0) return;
+		sharedImageError = null;
+		const remaining = MAX_IMAGES - sharedImages.length;
+		if (remaining <= 0) {
+			sharedImageError = `You can attach up to ${MAX_IMAGES} images.`;
+			return;
+		}
+		if (images.length > remaining) sharedImageError = `You can attach up to ${MAX_IMAGES} images.`;
+
+		for (const source of images.slice(0, remaining)) {
+			if (source.size > MAX_SOURCE_IMAGE_BYTES) {
+				sharedImageError = 'One of those images is too large to process (25MB max).';
+				continue;
+			}
+			const image = $state<SharedImage>({
+				key: crypto.randomUUID(),
+				dataUrl: '',
+				mediaId: null,
+				uploadStart: null,
+				uploadError: false,
+				processing: true
+			});
+			sharedImages.push(image);
+
+			const preparation = (async () => {
+				try {
+					const { blob } = await compressImage(source, { maxBytes: MAX_IMAGE_BYTES });
+					if (blob.size > MAX_IMAGE_BYTES) {
+						image.uploadError = true;
+						sharedImageError = 'One image is still over 4MB after compression.';
+						return;
+					}
+					image.dataUrl = await dataUrlFor(blob);
+					const started = beginMediaUpload(blob, 'image');
+					image.uploadStart = started;
+					started
+						.then(({ id, whenUploaded }) => {
+							image.mediaId = id;
+							whenUploaded.catch(() => {
+								image.mediaId = null;
+								image.uploadError = true;
+							});
+						})
+						.catch(() => (image.uploadError = true));
+				} catch {
+					image.uploadError = true;
+				} finally {
+					image.processing = false;
+					captionEl?.focus();
+				}
+			})();
+			sharedImagePreparations.add(preparation);
+			preparation.finally(() => sharedImagePreparations.delete(preparation));
+		}
+	}
+
+	function removeSharedImage(key: string) {
+		sharedImages = sharedImages.filter((image) => image.key !== key);
+		if (sharedImages.every((image) => !image.uploadError)) sharedImageError = null;
+	}
+
+	function onSharedImageChosen(event: Event) {
+		const input = event.currentTarget as HTMLInputElement;
+		const files = Array.from(input.files ?? []);
+		input.value = '';
+		attachSharedImages(files);
+	}
+
+	function onSharedImagePaste(event: ClipboardEvent) {
+		const files = imageFilesFrom(event.clipboardData);
+		if (files.length === 0) return;
+		event.preventDefault();
+		attachSharedImages(files);
+	}
+
+	function onSharedImageDragOver(event: DragEvent) {
+		if (!Array.from(event.dataTransfer?.types ?? []).includes('Files')) return;
+		event.preventDefault();
+		if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+		sharedImageDragging = true;
+	}
+
+	function onSharedImageDragLeave(event: DragEvent) {
+		const current = event.currentTarget as HTMLElement;
+		if (event.relatedTarget instanceof Node && current.contains(event.relatedTarget)) return;
+		sharedImageDragging = false;
+	}
+
+	function onSharedImageDrop(event: DragEvent) {
+		event.preventDefault();
+		sharedImageDragging = false;
+		attachSharedImages(imageFilesFrom(event.dataTransfer));
+	}
+
 	function buildContent(): string {
 		const parts: string[] = [];
-		if (sharedImageMediaId) parts.push(`![Shared image](/api/media/${sharedImageMediaId})`);
+		for (const image of sharedImages) {
+			if (image.mediaId) parts.push(`![Shared image](/api/media/${image.mediaId})`);
+		}
 		if (caption.trim()) parts.push(caption.trim());
 		return parts.join('\n\n');
+	}
+
+	async function finishImageStarts() {
+		await Promise.allSettled([...sharedImagePreparations]);
+		await Promise.allSettled(
+			sharedImages
+				.filter((image) => !image.mediaId && !image.uploadError)
+				.map((image) => image.uploadStart)
+		);
 	}
 
 	// Android launches a share-target navigation as a fresh activity with no
@@ -180,8 +300,7 @@
 	// resumes on the home river instead of a dead capture screen.
 	async function leave(sending?: Promise<unknown>) {
 		// The history entry is what has to land before close() — not the root
-		// layout's own data (notably its session check, which can hit the
-		// network on a token refresh). Waiting on goto() unconditionally meant
+		// layout's own streamed data. Waiting on goto() unconditionally meant
 		// a slow or flaky connection right after a share intent could leave the
 		// sheet stuck on screen indefinitely; capping the wait keeps this
 		// bounded without giving up the safety net the history replace exists
@@ -223,9 +342,7 @@
 		// A tag tap here can easily beat the signing round trip (there's no
 		// typing pause like the in-app composer has), so wait for it — never
 		// for the full upload, just the fast id-issuing step.
-		if (sharedImageDataUrl && !sharedImageMediaId && !sharedImageTooLarge) {
-			await sharedImageUploadStart?.catch(() => {});
-		}
+		await finishImageStarts();
 
 		// Whatever's typed inline (see insertHashtag) joins whatever tag button
 		// was tapped, if any — the two aren't alternatives, they're the same
@@ -236,7 +353,7 @@
 			title: displayTitle,
 			content_markdown: buildContent(),
 			source_url: sourceUrl,
-			source_type: sourceUrl || sharedImageDataUrl ? 'share' : null,
+			source_type: sourceUrl || sharedImages.length ? 'share' : null,
 			source_title: fetchedTitle,
 			source_description: fetchedDescription,
 			source_image: fetchedImage,
@@ -252,17 +369,27 @@
 		// image path used to do — is what made saving a shared photo feel like
 		// the app had hung.
 		addPending(entry);
-		leave(
-			syncEntryNow(entry).then((noteId) => {
-				// Once it's on the server the stream will load it for real, so the
-				// local stand-in has done its job.
-				if (noteId) removePending(entry.client_id);
+		const uploadsFinished = Promise.allSettled(
+			sharedImages.map(async (image) => {
+				const pending = await image.uploadStart;
+				if (pending) await pending.whenUploaded;
 			})
+		);
+		leave(
+			Promise.all([
+				syncEntryNow(entry).then((noteId) => {
+					// Once it's on the server the stream will load it for real, so the
+					// local stand-in has done its job.
+					if (noteId) removePending(entry.client_id);
+				}),
+				uploadsFinished
+			])
 		);
 	}
 
-	function openInEditor() {
+	async function openInEditor() {
 		if (submitted) return;
+		await finishImageStarts();
 		const q = new URLSearchParams();
 		if (displayTitle) q.set('title', displayTitle);
 		const content = buildContent() || caption || leftoverText;
@@ -299,10 +426,16 @@
 		-->
 		<div
 			class="flex max-h-[92vh] flex-col rounded-t-[1.375rem] px-[1.125rem] pt-[0.625rem]"
-			style="background: var(--color-surface); --fade-to: var(--color-surface); box-shadow: 0 -8px 34px rgba(0,0,0,.16); padding-bottom: calc(0.75rem + env(safe-area-inset-bottom));"
+			style={sharedImageDragging
+				? 'background: var(--color-surface); --fade-to: var(--color-surface); box-shadow: inset 0 0 0 3px var(--color-accent), 0 -8px 34px rgba(0,0,0,.16); padding-bottom: calc(0.75rem + env(safe-area-inset-bottom));'
+				: 'background: var(--color-surface); --fade-to: var(--color-surface); box-shadow: 0 -8px 34px rgba(0,0,0,.16); padding-bottom: calc(0.75rem + env(safe-area-inset-bottom));'}
 			transition:fly={{ y: 420, duration: 320, easing: quintOut }}
 			onintroend={() => captionEl?.focus()}
 			onclick={(e) => e.stopPropagation()}
+			onpaste={onSharedImagePaste}
+			ondragover={onSharedImageDragOver}
+			ondragleave={onSharedImageDragLeave}
+			ondrop={onSharedImageDrop}
 			role="presentation"
 		>
 			<!-- Focusing while the sheet is still translating up gets a visible
@@ -328,19 +461,50 @@
 							style="border-color: var(--color-border); border-top-color: var(--color-accent);"
 						></div>
 					</div>
-				{:else if sharedImageDataUrl}
-					<img
-						src={sharedImageDataUrl}
-						alt=""
-						class="mb-3 max-h-44 w-full rounded-[16px] object-cover"
-						style="background: var(--color-surface-2);"
-					/>
+				{:else if sharedImages.length > 0}
+					<div class="mb-3 flex gap-2 overflow-x-auto pt-1 pr-1">
+						{#each sharedImages as image (image.key)}
+							<div class="relative shrink-0">
+								{#if image.dataUrl}
+									<img
+										src={image.dataUrl}
+										alt=""
+										class="h-32 w-32 rounded-[16px] object-cover"
+										class:opacity-50={image.processing || image.uploadError}
+										style="background: var(--color-surface-2);"
+									/>
+								{:else}
+									<div
+										class="h-32 w-32 animate-pulse rounded-[16px]"
+										style="background: var(--color-surface-2);"
+									></div>
+								{/if}
+								{#if image.processing}
+									<span
+										class="absolute inset-0 grid place-items-center text-[0.68rem] font-bold"
+										style="color: var(--color-ink-muted);"
+									>
+										Compressing
+									</span>
+								{/if}
+								<button
+									type="button"
+									aria-label="Remove image"
+									class="absolute -top-1 -right-1 grid h-7 w-7 place-items-center rounded-full text-xs"
+									style="background: var(--color-ink); color: var(--color-bg);"
+									onclick={() => removeSharedImage(image.key)}
+								>
+									✕
+								</button>
+							</div>
+						{/each}
+					</div>
 				{/if}
 
-				{#if !sharedImageDataUrl || sourceUrl}
+				{#if sharedImages.length === 0 || sourceUrl}
 					<div
-						class="mb-3 flex items-start gap-3 rounded-[16px] p-2.5"
-						style="background: var(--color-surface-2);"
+						class="mb-3 flex items-start gap-3 border-b pb-3"
+						style="border-color: var(--color-border);"
 					>
 						{#if fetchedImage}
 							<img
@@ -379,27 +543,27 @@
 					</div>
 				{/if}
 
-				{#if sharedImageTooLarge}
+				{#if sharedImageError || sharedImages.some((image) => image.uploadError)}
 					<p class="mb-2 text-[0.78rem]" style="color: var(--color-danger);">
-						That image is too large to attach right now — saving the text only.
+						{sharedImageError ?? "Couldn't upload one or more images — remove them or try again."}
 					</p>
 				{/if}
 
+				<!-- svelte-ignore a11y_autofocus (a capture-only route should open ready to type) -->
 				<textarea
 					bind:this={captionEl}
 					bind:value={caption}
 					placeholder="Add a thought…"
+					autofocus
+					inputmode="text"
 					rows="2"
-					class="mb-3 w-full resize-none bg-transparent font-serif text-[1.06rem] leading-[1.44] tracking-[-0.017em] outline-none"
+					class="mb-3 w-full resize-none bg-transparent font-serif text-[1.18rem] leading-[1.5] tracking-[-0.017em] outline-none"
 				></textarea>
 			</div>
 
 			<!-- Where it goes, then what it's about — the composer's order. -->
 			{#if continuation.target}
-				<div
-					class="mb-2.5 flex shrink-0 items-center gap-2 rounded-[14px] py-1.5 pr-1.5 pl-2.5"
-					
-				>
+				<div class="mb-2.5 flex shrink-0 items-center gap-2 rounded-[14px] py-1.5 pr-1.5 pl-2.5">
 					<span class="shrink-0 text-[0.85rem] leading-none" style="color: var(--color-accent);"
 						>&#8627;</span
 					>
@@ -429,25 +593,28 @@
 				</div>
 			{/if}
 
-			<!--
-				Five tags + Open button in a 3×2 card grid.
-			-->
-			<div class="mb-2.5 grid shrink-0 grid-cols-3 gap-2.5">
+			<!-- Tags are choices, not six little destination cards. A single
+			     scrolling line keeps every option one tap away without wrapping
+			     the sheet in another grid of rounded containers. -->
+			<div
+				class="mb-3 flex shrink-0 items-center gap-4 overflow-x-auto border-y py-3"
+				style="border-color: var(--color-border); scrollbar-width: none;"
+			>
 				{#each quickTags as tag (tag)}
 					<button
 						type="button"
 						disabled={submitted}
-						class="flex h-[4rem] min-w-0 flex-col justify-between rounded-[16px] p-2.5 text-left transition-transform active:scale-[0.97] disabled:opacity-40"
+						class="shrink-0 text-[0.85rem] font-bold tracking-[-0.01em] transition-transform active:scale-[0.97] disabled:opacity-40"
 						style={savedTag === tag
-							? 'background: var(--color-success-soft); color: var(--color-success);'
-							: 'background: var(--color-surface-2); color: var(--color-ink); border: 1px solid var(--color-border);'}
+							? 'color: var(--color-success);'
+							: 'color: var(--color-accent);'}
 						onclick={() => save([tag], tag)}
 					>
 						{#if savedTag === tag}
-							<div class="flex h-full w-full items-center justify-center">
+							<span class="flex items-center gap-1.5">
 								<svg
-									width="20"
-									height="20"
+									width="14"
+									height="14"
 									viewBox="0 0 24 24"
 									fill="none"
 									stroke="currentColor"
@@ -455,27 +622,27 @@
 									stroke-linecap="round"
 									stroke-linejoin="round"><path d="M20 6 9 17l-5-5" /></svg
 								>
-							</div>
-						{:else}
-							<span class="text-[1.05rem] font-bold leading-none" style="color: var(--color-accent);">#</span>
-							<span class="w-full truncate text-[0.85rem] font-bold tracking-[-0.01em]">
-								{tag}
+								#{tag}
 							</span>
+						{:else}
+							#{tag}
 						{/if}
 					</button>
 				{/each}
+
+				<span class="h-4 w-px shrink-0" style="background: var(--color-border);"></span>
 
 				<button
 					type="button"
 					aria-label="Open in the editor"
 					disabled={submitted}
-					class="flex h-[4rem] min-w-0 flex-col justify-between rounded-[16px] p-2.5 text-left transition-transform active:scale-[0.97] disabled:opacity-40"
-					style="background: var(--color-ink); color: var(--color-surface);"
+					class="flex shrink-0 items-center gap-1.5 text-[0.85rem] font-bold tracking-[-0.01em] transition-transform active:scale-[0.97] disabled:opacity-40"
+					style="color: var(--color-ink-muted);"
 					onclick={openInEditor}
 				>
 					<svg
-						width="16"
-						height="16"
+						width="14"
+						height="14"
 						viewBox="0 0 24 24"
 						fill="none"
 						stroke="currentColor"
@@ -486,9 +653,7 @@
 					>
 						<path d="M7 17 17 7M8 7h9v9" />
 					</svg>
-					<span class="w-full truncate text-[0.85rem] font-bold tracking-[-0.01em]">
-						Open
-					</span>
+					Open editor
 				</button>
 			</div>
 
@@ -498,6 +663,39 @@
 				     compete with a whole picker UI for attention — it's sized and
 				     coloured like the quick tags next to it rather than shouting. -->
 			<div class="flex shrink-0 items-center gap-2">
+				<input
+					bind:this={sharedImageInput}
+					type="file"
+					accept="image/*"
+					multiple
+					class="hidden"
+					onchange={onSharedImageChosen}
+				/>
+				<button
+					type="button"
+					aria-label="Add an image"
+					disabled={submitted}
+					class="grid h-[2.875rem] w-[2.875rem] shrink-0 place-items-center rounded-full disabled:opacity-40"
+					style="background: var(--color-surface-2); color: var(--color-ink-2);"
+					onclick={() => sharedImageInput?.click()}
+				>
+					<svg
+						width="17"
+						height="17"
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="1.9"
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						><rect x="3" y="4" width="18" height="16" rx="3" /><circle
+							cx="8.5"
+							cy="9.5"
+							r="1.5"
+						/><path d="M3 16l5-4 4 3 3-2 6 4" /></svg
+					>
+				</button>
+
 				<button
 					type="button"
 					aria-label="Cancel"

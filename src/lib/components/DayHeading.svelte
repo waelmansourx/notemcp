@@ -7,10 +7,13 @@
      offset, so as the page scrolls the current one stays put until the next
      heading's box reaches the top and physically pushes it out — no scroll
      listeners, no JS state, so there's nothing to end up invisible. -->
-<div class="sticky top-0 z-10 flex justify-center pt-[18px] pb-2">
+<div
+	class="sticky top-0 z-10 flex justify-start pt-[18px] pb-2"
+	style="background: var(--color-bg);"
+>
 	<h2
-		class="rounded-full px-4 py-1.5 text-[0.78rem] font-semibold shadow-sm"
-		style="background: var(--color-surface-2); color: var(--color-ink-muted);"
+		class="py-1.5 text-[0.72rem] font-bold tracking-[0.07em] uppercase"
+		style="color: var(--color-ink-muted);"
 	>
 		{label}
 	</h2>

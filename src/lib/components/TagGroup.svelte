@@ -29,17 +29,10 @@
 	});
 </script>
 
-<!--
-	A tag as a place rather than a row.
-
-	The list this replaced gave a tag one line and one preview, which told you
-	a tag existed but nothing about what was in it. Here the tag keeps its own
-	card and its notes keep a constant shape — picture, your words, two facts —
-	so the eye scans the left column of thumbnails and never re-learns the
-	layout. Recognition is the point: you remember the red YouTube square long
-	before you remember what you typed under it.
--->
-<section class="mb-3 rounded-[22px] px-3.5 pt-3 pb-2.5" style="background: var(--color-surface-2);">
+<!-- A tag remains a useful place with several recognizable previews, but a
+     divider does enough to separate it from the next one. Wrapping every tag
+     in its own filled card made the page read like nested containers. -->
+<section class="border-b py-4" style="border-color: var(--color-border);">
 	<a
 		href={`/?tag=${encodeURIComponent(tag.name)}`}
 		class="flex items-center gap-2 active:opacity-60"
@@ -51,8 +44,8 @@
 		>
 		<span class="flex-1"></span>
 		<span
-			class="grid h-6 w-6 shrink-0 place-items-center rounded-full"
-			style="background: var(--color-surface); color: var(--color-ink-muted);"
+			class="grid h-6 w-6 shrink-0 place-items-center"
+			style="color: var(--color-ink-muted);"
 			aria-hidden="true"
 		>
 			<svg
@@ -107,16 +100,14 @@
 								<span class="mt-1 flex items-center gap-1.5">
 									{#if note.source}
 										<span
-											class="truncate rounded-full px-1.5 py-0.5 text-[0.68rem] font-bold"
-											style="background: var(--color-surface); color: var(--color-ink-muted);"
-											>{note.source}</span
+											class="truncate text-[0.68rem] font-bold"
+											style="color: var(--color-ink-muted);">{note.source}</span
 										>
 									{/if}
 									{#if note.count > 0}
 										<span
-											class="shrink-0 rounded-full px-1.5 py-0.5 text-[0.68rem] font-bold whitespace-nowrap"
-											style="background: var(--color-accent-soft); color: var(--color-accent);"
-											>{note.count} more</span
+											class="shrink-0 text-[0.68rem] font-bold whitespace-nowrap"
+											style="color: var(--color-accent);">{note.count} more</span
 										>
 									{:else}
 										<span
@@ -133,8 +124,8 @@
 						<button
 							type="button"
 							aria-label={`Add a thought to "${note.label}"`}
-							class="grid h-[30px] w-[30px] shrink-0 place-items-center rounded-full active:scale-90"
-							style="background: var(--color-surface); color: var(--color-ink-muted);"
+							class="grid h-[30px] w-[30px] shrink-0 place-items-center active:scale-90"
+							style="color: var(--color-accent);"
 							onclick={() => writeInto(note)}
 						>
 							<svg

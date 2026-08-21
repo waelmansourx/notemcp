@@ -134,8 +134,8 @@
 			<button
 				type="button"
 				aria-label="Add a thought to this"
-				class="-my-1 grid h-[26px] w-[26px] shrink-0 place-items-center rounded-full active:scale-90"
-				style="background: var(--color-surface-2); color: var(--color-ink-muted);"
+				class="-my-1 grid h-[26px] w-[26px] shrink-0 place-items-center active:scale-90"
+				style="color: var(--color-accent);"
 				onclick={() => writeInto(stubOf(note))}
 			>
 				<svg

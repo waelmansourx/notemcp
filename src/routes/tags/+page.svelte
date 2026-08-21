@@ -17,10 +17,14 @@
 
 <svelte:head><title>Tags · NoteMCP</title></svelte:head>
 
-<div class="safe-top mx-auto min-h-screen max-w-2xl pb-36">
-	<StreamNav subtitle={tagCount > 0 ? `${tagCount} ${tagCount === 1 ? 'tag' : 'tags'} in use` : ''} />
+<div
+	class="safe-top mx-auto min-h-screen max-w-[72rem] pb-36 lg:grid lg:grid-cols-[13rem_minmax(0,42rem)] lg:justify-center lg:gap-12 lg:px-8"
+>
+	<StreamNav
+		subtitle={tagCount > 0 ? `${tagCount} ${tagCount === 1 ? 'tag' : 'tags'} in use` : ''}
+	/>
 
-	<div class="px-[22px] pt-2">
+	<main class="min-w-0 px-[22px] pt-2 lg:px-0">
 		{#if data.nodes.length === 0}
 			<p class="pt-24 text-center text-[0.94rem]" style="color: var(--color-ink-muted);">
 				No tags yet. Add one while you're writing and it'll show up here.
@@ -53,7 +57,7 @@
 				<span class="font-semibold">#notemcp</span> too, so you never have to add both.
 			</p>
 		{/if}
-	</div>
+	</main>
 </div>
 
 <Composer />

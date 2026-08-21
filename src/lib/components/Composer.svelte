@@ -9,7 +9,7 @@
 	import { continuation, detach, touch, restore } from '$lib/composer.svelte';
 	import { saveDraft, readDraft, clearDraft } from '$lib/draft.svelte';
 	import { suggestions } from '$lib/cache.svelte';
-	import { beginMediaUpload, type PendingMedia } from '$lib/media';
+	import { beginMediaUpload, compressImage, type PendingMedia } from '$lib/media';
 	import TagPicker from './TagPicker.svelte';
 	import { onMount } from 'svelte';
 	import { fly, fade, scale } from 'svelte/transition';
@@ -58,23 +58,27 @@
 	let interim = $state('');
 	let voiceError = $state('');
 
-	// Attach uploads straight to R2 (see ADR-001) so the note body carries a
-	// tiny reference instead of megabytes of base64 — never the latter, not
-	// even as a fallback. photoDataUrl is read locally for an instant preview
-	// only and is never written into saved content. photoMediaId becomes
-	// available the moment the (fast) signing request resolves, well before
-	// the bytes have actually finished uploading — save() awaits
-	// photoUploadStart itself only if it hasn't resolved yet, so a save is
-	// blocked on a small JSON round trip at worst, never on the upload.
+	// Attach uploads straight to R2 (see ADR-001) so the note body carries tiny
+	// references instead of base64. Previews stay local, and each source image
+	// is resized/compressed before its upload starts.
+	type PhotoAttachment = {
+		key: string;
+		dataUrl: string;
+		mediaId: string | null;
+		uploadStart: Promise<PendingMedia> | null;
+		uploadError: boolean;
+		processing: boolean;
+	};
 	let photoInput = $state<HTMLInputElement | null>(null);
-	let photoDataUrl = $state<string | null>(null);
-	let photoMediaId = $state<string | null>(null);
-	let photoUploadStart = $state<Promise<PendingMedia> | null>(null);
-	let photoUploadError = $state(false);
-	let photoTooLarge = $state(false);
+	let photos = $state<PhotoAttachment[]>([]);
+	let photoError = $state<string | null>(null);
+	let photoDragging = $state(false);
 	const MAX_PHOTO_BYTES = 4 * 1024 * 1024;
+	const MAX_SOURCE_PHOTO_BYTES = 25 * 1024 * 1024;
+	const MAX_PHOTOS = 10;
+	const photoPreparations = new Set<Promise<void>>();
 
-	let hasContent = $derived(text.trim().length > 0 || Boolean(photoDataUrl));
+	let hasContent = $derived(text.trim().length > 0 || photos.length > 0);
 
 	/* ---------------- continuing an earlier thought ----------------
 
@@ -181,9 +185,7 @@
 
 	type DiscardSnapshot = {
 		text: string;
-		photoDataUrl: string | null;
-		photoMediaId: string | null;
-		photoUploadStart: Promise<PendingMedia> | null;
+		photos: PhotoAttachment[];
 		selected: string[];
 	};
 	let pendingDiscard = $state<DiscardSnapshot | null>(null);
@@ -198,7 +200,7 @@
 		}
 
 		if (discardTimer) clearTimeout(discardTimer);
-		pendingDiscard = { text, photoDataUrl, photoMediaId, photoUploadStart, selected };
+		pendingDiscard = { text, photos: [...photos], selected };
 		discardTimer = setTimeout(() => {
 			pendingDiscard = null;
 			discardTimer = null;
@@ -216,9 +218,7 @@
 		discardTimer = null;
 
 		text = pendingDiscard.text;
-		photoDataUrl = pendingDiscard.photoDataUrl;
-		photoMediaId = pendingDiscard.photoMediaId;
-		photoUploadStart = pendingDiscard.photoUploadStart;
+		photos = pendingDiscard.photos;
 		selected = pendingDiscard.selected;
 		pendingDiscard = null;
 
@@ -232,53 +232,131 @@
 
 	function onPhotoChosen(event: Event) {
 		const input = event.currentTarget as HTMLInputElement;
-		const file = input.files?.[0];
+		const files = Array.from(input.files ?? []);
 		input.value = '';
-		if (!file) return;
+		attachPhotos(files);
+	}
 
-		photoTooLarge = file.size > MAX_PHOTO_BYTES;
-		if (photoTooLarge) return;
+	function dataUrlFor(blob: Blob): Promise<string> {
+		return new Promise((resolve, reject) => {
+			const reader = new FileReader();
+			reader.onload = () => resolve(reader.result as string);
+			reader.onerror = () => reject(reader.error);
+			reader.readAsDataURL(blob);
+		});
+	}
 
-		photoMediaId = null;
-		photoUploadError = false;
-		const reader = new FileReader();
-		reader.onload = () => {
-			photoDataUrl = reader.result as string;
-			textarea?.focus();
-		};
-		reader.readAsDataURL(file);
+	function imageFilesFrom(data: DataTransfer | null): File[] {
+		if (!data) return [];
+		const files = Array.from(data.files).filter((file) => file.type.startsWith('image/'));
+		if (files.length > 0) return files;
+		return Array.from(data.items)
+			.filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+			.map((item) => item.getAsFile())
+			.filter((file): file is File => file !== null);
+	}
 
-		const started = beginMediaUpload(file, 'image');
-		photoUploadStart = started;
-		started
-			.then(({ id, whenUploaded }) => {
-				if (photoUploadStart !== started) return; // superseded by a later pick/clear
-				photoMediaId = id;
-				whenUploaded.catch(() => {
-					// The signed id never actually landed in R2 — embedding it
-					// would be a permanently broken image, which is worse than no
-					// image, so pull it back out if it hasn't been saved yet.
-					if (photoUploadStart !== started) return;
-					photoMediaId = null;
-					photoUploadError = true;
-				});
-			})
-			.catch(() => {
-				if (photoUploadStart === started) photoUploadError = true;
+	function attachPhotos(files: File[]) {
+		const images = files.filter((file) => file.type.startsWith('image/'));
+		if (images.length === 0) return;
+		photoError = null;
+
+		const remaining = MAX_PHOTOS - photos.length;
+		if (remaining <= 0) {
+			photoError = `You can attach up to ${MAX_PHOTOS} images.`;
+			return;
+		}
+		if (images.length > remaining) photoError = `You can attach up to ${MAX_PHOTOS} images.`;
+
+		for (const file of images.slice(0, remaining)) {
+			if (file.size > MAX_SOURCE_PHOTO_BYTES) {
+				photoError = 'One of those images is too large to process (25MB max).';
+				continue;
+			}
+			const photo = $state<PhotoAttachment>({
+				key: crypto.randomUUID(),
+				dataUrl: '',
+				mediaId: null,
+				uploadStart: null,
+				uploadError: false,
+				processing: true
 			});
+			photos.push(photo);
+
+			const preparation = (async () => {
+				try {
+					const { blob } = await compressImage(file, { maxBytes: MAX_PHOTO_BYTES });
+					if (blob.size > MAX_PHOTO_BYTES) {
+						photo.uploadError = true;
+						photoError = 'One image is still over 4MB after compression.';
+						return;
+					}
+					photo.dataUrl = await dataUrlFor(blob);
+					const started = beginMediaUpload(blob, 'image');
+					photo.uploadStart = started;
+					started
+						.then(({ id, whenUploaded }) => {
+							photo.mediaId = id;
+							whenUploaded.catch(() => {
+								photo.mediaId = null;
+								photo.uploadError = true;
+							});
+						})
+						.catch(() => (photo.uploadError = true));
+				} catch {
+					photo.uploadError = true;
+				} finally {
+					photo.processing = false;
+					textarea?.focus();
+				}
+			})();
+			photoPreparations.add(preparation);
+			preparation.finally(() => photoPreparations.delete(preparation));
+		}
+	}
+
+	function onPhotoPaste(event: ClipboardEvent) {
+		const files = imageFilesFrom(event.clipboardData);
+		if (files.length === 0) return;
+		event.preventDefault();
+		attachPhotos(files);
+	}
+
+	function onPhotoDragOver(event: DragEvent) {
+		if (!Array.from(event.dataTransfer?.types ?? []).includes('Files')) return;
+		event.preventDefault();
+		if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+		photoDragging = true;
+	}
+
+	function onPhotoDragLeave(event: DragEvent) {
+		const current = event.currentTarget as HTMLElement;
+		if (event.relatedTarget instanceof Node && current.contains(event.relatedTarget)) return;
+		photoDragging = false;
+	}
+
+	function onPhotoDrop(event: DragEvent) {
+		event.preventDefault();
+		photoDragging = false;
+		attachPhotos(imageFilesFrom(event.dataTransfer));
 	}
 
 	function clearPhoto() {
-		photoDataUrl = null;
-		photoMediaId = null;
-		photoUploadStart = null;
-		photoUploadError = false;
-		photoTooLarge = false;
+		photos = [];
+		photoError = null;
+		photoDragging = false;
+	}
+
+	function removePhoto(key: string) {
+		photos = photos.filter((photo) => photo.key !== key);
+		if (photos.every((photo) => !photo.uploadError)) photoError = null;
 	}
 
 	function buildContent(): string {
 		const parts: string[] = [];
-		if (photoMediaId) parts.push(`![](/api/media/${photoMediaId})`);
+		for (const photo of photos) {
+			if (photo.mediaId) parts.push(`![](/api/media/${photo.mediaId})`);
+		}
 		const t = text.trim();
 		if (t) parts.push(t);
 		return parts.join('\n\n');
@@ -289,9 +367,12 @@
 		// signing round trip, not the upload — but if Save is tapped in that
 		// narrow window, wait for it rather than either blocking on the full
 		// upload or silently dropping the photo.
-		if (photoDataUrl && !photoMediaId && photoUploadStart && !photoUploadError) {
-			await photoUploadStart.catch(() => {});
-		}
+		await Promise.allSettled([...photoPreparations]);
+		await Promise.allSettled(
+			photos
+				.filter((photo) => !photo.mediaId && !photo.uploadError)
+				.map((photo) => photo.uploadStart)
+		);
 
 		const content = buildContent();
 		if (!content) return;
@@ -650,10 +731,7 @@
 		     you arrived here from that thought's "+"; writing from scratch
 		     starts on an empty box. -->
 	{#if target}
-		<div
-			class="mb-2.5 flex shrink-0 items-center gap-2 rounded-[14px] py-1.5 pr-1.5 pl-2.5"
-			
-		>
+		<div class="mb-2.5 flex shrink-0 items-center gap-2 rounded-[14px] py-1.5 pr-1.5 pl-2.5">
 			<span class="shrink-0 text-[0.85rem] leading-none" style="color: var(--color-accent);"
 				>&#8627;</span
 			>
@@ -687,33 +765,48 @@
 		<TagPicker bind:selected recent={recentTags} onpick={() => textarea?.focus()} />
 	</div>
 
-	{#if photoDataUrl}
-		<div class="relative mb-3 inline-block shrink-0">
-			<img
-				src={photoDataUrl}
-				alt=""
-				class="h-20 w-20 rounded-[var(--radius-lg)] object-cover"
-				style="background: var(--color-surface-2);"
-			/>
-			<button
-				type="button"
-				aria-label="Remove photo"
-				class="absolute -top-1.5 -right-1.5 grid h-5 w-5 place-items-center rounded-full text-[10px]"
-				style="background: var(--color-ink); color: var(--color-bg);"
-				onclick={clearPhoto}
-			>
-				✕
-			</button>
+	{#if photos.length > 0}
+		<div class="mb-3 flex shrink-0 gap-2 overflow-x-auto pt-1 pr-1">
+			{#each photos as photo (photo.key)}
+				<div class="relative shrink-0">
+					{#if photo.dataUrl}
+						<img
+							src={photo.dataUrl}
+							alt=""
+							class="h-20 w-20 rounded-[var(--radius-lg)] object-cover"
+							class:opacity-50={photo.processing || photo.uploadError}
+							style="background: var(--color-surface-2);"
+						/>
+					{:else}
+						<div
+							class="h-20 w-20 animate-pulse rounded-[var(--radius-lg)]"
+							style="background: var(--color-surface-2);"
+						></div>
+					{/if}
+					{#if photo.processing}
+						<span
+							class="absolute inset-0 grid place-items-center text-[0.65rem] font-bold"
+							style="color: var(--color-ink-muted);"
+						>
+							Compressing
+						</span>
+					{/if}
+					<button
+						type="button"
+						aria-label="Remove image"
+						class="absolute -top-1.5 -right-1.5 grid h-5 w-5 place-items-center rounded-full text-[10px]"
+						style="background: var(--color-ink); color: var(--color-bg);"
+						onclick={() => removePhoto(photo.key)}
+					>
+						✕
+					</button>
+				</div>
+			{/each}
 		</div>
 	{/if}
-	{#if photoTooLarge}
+	{#if photoError || photos.some((photo) => photo.uploadError)}
 		<p class="mb-2 shrink-0 text-[0.78rem]" style="color: var(--color-danger);">
-			That photo's too large to attach right now (4MB max).
-		</p>
-	{/if}
-	{#if photoUploadError}
-		<p class="mb-2 shrink-0 text-[0.78rem]" style="color: var(--color-danger);">
-			Couldn't upload that photo — check your connection and try again.
+			{photoError ?? "Couldn't upload one or more images — remove them or try again."}
 		</p>
 	{/if}
 
@@ -724,17 +817,30 @@
 		     `field-sizing: content` every textarea in this app already gets
 		     (layout.css), capped so a long thought scrolls instead of pushing
 		     the stream underneath it off the bottom of the window. -->
-	<textarea
-		bind:this={textarea}
-		bind:value={text}
-		onkeydown={onKeydown}
-		rows={desktopMode ? 1 : 4}
-		placeholder="Write something…"
-		style="outline: none;"
-		class={desktopMode
-			? 'max-h-[38vh] w-full flex-none resize-none overflow-y-auto bg-transparent font-serif text-[1.06rem] leading-[1.44] tracking-[-0.017em] outline-none'
-			: 'min-h-[calc(1.06rem*1.44*4)] w-full flex-auto resize-none overflow-y-auto bg-transparent font-serif text-[1.06rem] leading-[1.44] tracking-[-0.017em] outline-none'}
-	></textarea>
+	<div
+		class="relative flex min-h-0 w-full"
+		class:ring-2={photoDragging}
+		class:rounded-[var(--radius-lg)]={photoDragging}
+		style={photoDragging ? 'box-shadow: 0 0 0 2px var(--color-accent);' : undefined}
+		ondragover={onPhotoDragOver}
+		ondragleave={onPhotoDragLeave}
+		ondrop={onPhotoDrop}
+		role="group"
+		aria-label="Composer image drop area"
+	>
+		<textarea
+			bind:this={textarea}
+			bind:value={text}
+			onkeydown={onKeydown}
+			onpaste={onPhotoPaste}
+			rows={desktopMode ? 1 : 4}
+			placeholder={photoDragging ? 'Drop image to attach…' : 'Write something…'}
+			style="outline: none;"
+			class={desktopMode
+				? 'max-h-[38vh] w-full flex-none resize-none overflow-y-auto bg-transparent font-serif text-[1.18rem] leading-[1.5] tracking-[-0.017em] outline-none'
+				: 'min-h-[calc(1.18rem*1.5*4)] w-full flex-auto resize-none overflow-y-auto bg-transparent font-serif text-[1.18rem] leading-[1.5] tracking-[-0.017em] outline-none'}
+		></textarea>
+	</div>
 
 	<div class="mt-2 flex shrink-0 items-center gap-2">
 		<button
@@ -762,6 +868,7 @@
 			bind:this={photoInput}
 			type="file"
 			accept="image/*"
+			multiple
 			class="hidden"
 			onchange={onPhotoChosen}
 		/>
@@ -911,11 +1018,12 @@
 -->
 {#if desktop}
 	<div
-		class="pointer-events-none fixed inset-x-0 bottom-0 z-20 hidden justify-center px-[18px] pb-8 lg:pb-0 lg:flex"
+		class="pointer-events-none fixed bottom-0 z-20 hidden -translate-x-1/2 pb-8 lg:flex"
+		style="left: calc(50% + 8rem); width: min(42rem, calc(100vw - 22rem));"
 		class:opacity-0={recording}
 	>
 		<div
-			class="pointer-events-auto flex w-full max-w-2xl flex-col rounded-[1.375rem] px-[1.125rem] pt-[0.625rem] pb-3"
+			class="pointer-events-auto flex w-full flex-col rounded-[0.9rem] px-[1.125rem] pt-[0.625rem] pb-3"
 			style="background: var(--color-surface); border: 1px solid var(--color-border); box-shadow: 0 12px 34px rgba(0,0,0,.12);"
 		>
 			{@render composeBody(true)}

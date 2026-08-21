@@ -65,7 +65,10 @@ export const load: LayoutServerLoad = async ({ locals: { session, supabase, user
 	// which was adding a second network round-trip to every page load.
 
 	return {
-		session,
+		// The browser only compares expiry times when auth state changes. Keep
+		// the full cookie-backed session on the server instead of serializing its
+		// unverified user payload into every page.
+		authExpiresAt: session?.expires_at ?? null,
 		cookies: cookies.getAll(),
 
 		/*
@@ -84,8 +87,6 @@ export const load: LayoutServerLoad = async ({ locals: { session, supabase, user
 		 * so the client can tell "we couldn't ask" — keep showing the cached
 		 * row — apart from "you have no tags", which really should empty it.
 		 */
-		recentTags: user
-			? rankTags(supabase, user.id).catch(() => null)
-			: Promise.resolve([] as Tag[])
+		recentTags: user ? rankTags(supabase, user.id).catch(() => null) : Promise.resolve([] as Tag[])
 	};
 };

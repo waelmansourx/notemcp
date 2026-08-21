@@ -110,15 +110,23 @@ async function handleShareTarget(request: Request): Promise<Response> {
 		if (typeof text === 'string' && text) params.set('text', text);
 		if (typeof sharedUrl === 'string' && sharedUrl) params.set('url', sharedUrl);
 
-		const file = formData.get('images');
-		if (file instanceof File && file.size > 0) {
+		const files = formData
+			.getAll('images')
+			.filter((value): value is File => value instanceof File && value.size > 0);
+		if (files.length > 0) {
 			const cache = await caches.open(SHARE_CACHE);
-			const shareId = crypto.randomUUID();
-			await cache.put(
-				`/__share/${shareId}`,
-				new Response(file, { headers: { 'content-type': file.type || 'application/octet-stream' } })
+			await Promise.all(
+				files.map(async (file) => {
+					const shareId = crypto.randomUUID();
+					await cache.put(
+						`/__share/${shareId}`,
+						new Response(file, {
+							headers: { 'content-type': file.type || 'application/octet-stream' }
+						})
+					);
+					params.append('shared', shareId);
+				})
 			);
-			params.set('shared', shareId);
 		}
 	} catch {
 		// Malformed share payload — fall through to a bare /capture with

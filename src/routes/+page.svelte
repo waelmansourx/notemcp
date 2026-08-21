@@ -138,64 +138,70 @@
 
 <svelte:head><title>NoteMCP</title></svelte:head>
 
-<!-- pb-36 clears the composer docked at the bottom of the column — the
-     phone's collapsed write bar below `lg`, the always-open dock above it. -->
-<div class="safe-top mx-auto min-h-screen max-w-2xl pb-36">
+<!-- One reading column on a phone; a quiet navigation rail beside that same
+     measure on desktop. The stream never stretches into long unreadable
+     lines just because the window has room, but it also no longer looks like
+     the phone layout was dropped in the middle of a monitor. -->
+<div
+	class="safe-top mx-auto min-h-screen max-w-[72rem] pb-36 lg:grid lg:grid-cols-[13rem_minmax(0,42rem)] lg:justify-center lg:gap-12 lg:px-8"
+>
 	<StreamNav {subtitle} minimal={showFilter} />
 
-	{#if showFilter}
-		<StreamFilter
-			tags={allTags}
-			total={notes.length}
-			showing={visible.length}
-			{dateRange}
-			onDateRangeChange={(range) => (dateRange = range)}
-		/>
-	{/if}
+	<main class="min-w-0">
+		{#if showFilter}
+			<StreamFilter
+				tags={allTags}
+				total={notes.length}
+				showing={visible.length}
+				{dateRange}
+				onDateRangeChange={(range) => (dateRange = range)}
+			/>
+		{/if}
 
-	<div class="px-[22px]">
-		{#if awaiting}
-			<!-- Only ever seen on a first run on this device: after that the
+		<div class="px-[22px] lg:px-0">
+			{#if awaiting}
+				<!-- Only ever seen on a first run on this device: after that the
 			     cached stream renders in place of this. Deliberately shaped
 			     like entries rather than a spinner — a spinner says "wait", a
 			     page taking its shape says "nearly there". -->
-			<div class="pt-6" aria-hidden="true">
-				{#each [0.9, 0.55, 0.75] as width, i (i)}
-					<div class="mb-8 animate-pulse" style="animation-delay: {i * 120}ms;">
-						<div
-							class="mb-3 h-3 w-16 rounded-full"
-							style="background: var(--color-border);"
-						></div>
-						<div
-							class="h-4 rounded-full"
-							style="width: {width * 100}%; background: var(--color-border);"
-						></div>
-					</div>
+				<div class="pt-6" aria-hidden="true">
+					{#each [0.9, 0.55, 0.75] as width, i (i)}
+						<div class="mb-8 animate-pulse" style="animation-delay: {i * 120}ms;">
+							<div
+								class="mb-3 h-3 w-16 rounded-full"
+								style="background: var(--color-border);"
+							></div>
+							<div
+								class="h-4 rounded-full"
+								style="width: {width * 100}%; background: var(--color-border);"
+							></div>
+						</div>
+					{/each}
+				</div>
+			{:else if groups.length === 0}
+				<p
+					class="pt-24 text-center text-[1.05rem] leading-[1.5] font-medium tracking-[-0.015em]"
+					style="color: var(--color-ink-muted);"
+				>
+					{#if filtering}
+						Nothing here matches. Try fewer words, or a different tag.
+					{:else if failed}
+						Couldn't reach your notes, and there's no copy on this device yet. They're safe — try
+						again when you have a connection.
+					{:else}
+						Nothing yet. Write something — you can sort it out later.
+					{/if}
+				</p>
+			{:else}
+				{#each groups as group (group.key)}
+					<DayHeading label={group.label} />
+					{#each group.notes as note (note.id)}
+						<Entry {note} showTime />
+					{/each}
 				{/each}
-			</div>
-		{:else if groups.length === 0}
-			<p
-				class="pt-24 text-center text-[1.05rem] leading-[1.5] font-medium tracking-[-0.015em]"
-				style="color: var(--color-ink-muted);"
-			>
-				{#if filtering}
-					Nothing here matches. Try fewer words, or a different tag.
-				{:else if failed}
-					Couldn't reach your notes, and there's no copy on this device yet. They're safe —
-					try again when you have a connection.
-				{:else}
-					Nothing yet. Write something — you can sort it out later.
-				{/if}
-			</p>
-		{:else}
-			{#each groups as group (group.key)}
-				<DayHeading label={group.label} />
-				{#each group.notes as note (note.id)}
-					<Entry {note} showTime />
-				{/each}
-			{/each}
-		{/if}
-	</div>
+			{/if}
+		</div>
+	</main>
 </div>
 
 <Composer />
