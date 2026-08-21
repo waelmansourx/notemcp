@@ -29,13 +29,14 @@
 			</p>
 		{/if}
 
-		{#each data.nodes as node (node.id)}
+		{#each data.nodes as node, i (node.id)}
 			<div style={indent(node.depth)}>
 				<TagGroup
 					tag={{ id: node.id, name: node.name }}
 					count={node.count}
 					notes={node.notes}
 					label={node.depth > 0 ? node.leaf : undefined}
+					featured={i === 0}
 				/>
 			</div>
 		{/each}
