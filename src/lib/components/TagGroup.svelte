@@ -119,7 +119,10 @@
 			onscroll={onShelfScroll}
 		>
 			{#each notes as note (note.id)}
-				<a href={`/note/${note.id}`} class="w-[168px] max-w-[47vw] shrink-0 active:opacity-65">
+				<a
+					href={`/note/${note.id}`}
+					class="w-[calc(50vw-35px)] max-w-[172px] shrink-0 active:opacity-65 lg:w-[168px]"
+				>
 					<div
 						class="relative aspect-[4/3] w-full overflow-hidden rounded-[16px]"
 						style="background: var(--color-surface-2); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-border) 70%, transparent);"
@@ -175,7 +178,7 @@
 		</div>
 	{:else}
 		<div
-			class="shelf-scroll shelf-paged shelf-frame -mx-[22px] mt-2 flex w-[calc(100%+44px)] max-w-none gap-4 overflow-x-auto px-[22px] py-1 lg:mx-0 lg:w-full lg:px-0"
+			class="shelf-scroll shelf-paged -mx-[22px] mt-2 flex w-[calc(100%+44px)] max-w-none gap-4 overflow-x-auto px-[22px] py-1 lg:mx-0 lg:w-full lg:px-0"
 			onscroll={onShelfScroll}
 			onwheel={onPagedWheel}
 		>
@@ -262,10 +265,6 @@
 		font-weight: 400;
 	}
 
-	.shelf-frame {
-		background: color-mix(in srgb, var(--color-surface-2) 58%, transparent);
-	}
-
 	.shelf-paged {
 		scroll-behavior: smooth;
 		scroll-snap-type: x mandatory;
@@ -302,10 +301,6 @@
 	@media (prefers-color-scheme: dark) {
 		.shelf-hash {
 			color: color-mix(in srgb, var(--color-accent-path) 54%, var(--color-bg));
-		}
-
-		.shelf-frame {
-			background: color-mix(in srgb, var(--color-surface-2) 72%, transparent);
 		}
 	}
 </style>
