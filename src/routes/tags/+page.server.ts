@@ -1,6 +1,7 @@
 import type { PageServerLoad } from './$types';
 import type { Tag, ThreadStub } from '$lib/types';
 import { flattenTagTree, tagAncestors, tagTree } from '$lib/tags';
+import { previewImageFor } from '$lib/preview-image';
 
 /**
  * One row of the tag tree.
@@ -37,12 +38,12 @@ const PER_TAG = 9;
  * This page used to load 500 whole notes and hand each tag the raw
  * `content_markdown` of its most recent one. A note with a photo in it *is* a
  * megabytes-long base64 data URL, so a handful of those went into the HTML as
- * literal text and took the page down with them. It now asks for `preview`, a
- * computed column that trims the body in Postgres, so those bytes never leave
- * the database.
+ * literal text and took the page down with them. It now asks for computed
+ * preview fields: `preview` for text and `preview_image` for the first stable
+ * thumbnail, so the note body never has to leave Postgres just to draw a shelf.
  */
 const PREVIEW_SELECT =
-	'id, title, source_title, source_image, source_url, updated_at, thread_count, preview, note_tags(tags(id, name))';
+	'id, title, source_title, source_image, source_url, preview_image, updated_at, thread_count, preview, note_tags(tags(id, name))';
 
 function label(row: any): string {
 	const raw = (row.source_title || row.title || row.preview || '').replace(/\s+/g, ' ').trim();
@@ -95,7 +96,7 @@ export const load: PageServerLoad = async ({ locals: { supabase, user } }) => {
 		stubs.set(row.id, {
 			id: row.id,
 			label: label(row),
-			image: row.source_image ?? null,
+			image: previewImageFor(row),
 			source: hostname(row.source_url ?? null),
 			count: row.thread_count ?? 0,
 			at: row.updated_at,
