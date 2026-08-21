@@ -30,9 +30,24 @@
 		if (!view) pendingFocus = true;
 	}
 
+	// A rendered markdown image replaces its `![alt](url)` source in CodeMirror.
+	// Letting the editor receive the initial press moves the caret into that
+	// hidden source span, which immediately reveals the raw URL. Images in the
+	// editor are display-only for now, so intercept the press before CodeMirror
+	// can turn the thumbnail back into markdown text.
+	function keepRenderedImageCollapsed(event: Event) {
+		const target = event.target;
+		if (!(target instanceof Element) || !target.closest('.cm-md-image')) return;
+		event.preventDefault();
+		event.stopPropagation();
+	}
+
 	onMount(() => {
 		let cancelled = false;
 		let instance: EditorView | null = null;
+
+		host.addEventListener('pointerdown', keepRenderedImageCollapsed, true);
+		host.addEventListener('mousedown', keepRenderedImageCollapsed, true);
 
 		// CodeMirror is browser-only and is the heaviest thing on this route,
 		// so it's imported here rather than statically: the note's text is
@@ -58,6 +73,8 @@
 
 		return () => {
 			cancelled = true;
+			host.removeEventListener('pointerdown', keepRenderedImageCollapsed, true);
+			host.removeEventListener('mousedown', keepRenderedImageCollapsed, true);
 			instance?.destroy();
 		};
 	});
@@ -199,6 +216,11 @@
 	.cm-host :global(.cm-line) {
 		width: 100%;
 		cursor: text;
+	}
+
+	.cm-host :global(.cm-md-image),
+	.cm-host :global(.cm-md-image img) {
+		cursor: default;
 	}
 
 	.cm-fallback,
