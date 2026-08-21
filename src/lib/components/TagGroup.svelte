@@ -75,15 +75,25 @@
 			{#each notes as note (note.id)}
 				<a href={`/note/${note.id}`} class="w-[152px] max-w-[44vw] shrink-0 active:opacity-65">
 					<div
-						class="aspect-[19/12] w-full overflow-hidden rounded-[12px]"
+						class="relative aspect-[19/12] w-full overflow-hidden rounded-[14px]"
 						style="background: var(--color-surface-2);"
 					>
 						{#if note.image}
+							<!-- The soft cover layer makes portrait, square and landscape sources
+							     belong to the same card shape; the foreground always remains whole. -->
 							<img
 								src={note.image}
 								alt=""
 								loading="lazy"
-								class="h-full w-full object-contain object-center"
+								aria-hidden="true"
+								class="absolute inset-0 h-full w-full scale-110 object-cover blur-xl opacity-45"
+							/>
+							<div class="absolute inset-0" style="background: color-mix(in srgb, var(--color-surface-2) 34%, transparent);"></div>
+							<img
+								src={note.image}
+								alt=""
+								loading="lazy"
+								class="relative z-10 h-full w-full object-contain object-center"
 							/>
 						{:else}
 							<div
