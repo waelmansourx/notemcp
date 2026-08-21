@@ -181,7 +181,7 @@
 		>
 			{#each pages as pageNotes, i (i)}
 				<div data-shelf-page class="w-[min(316px,82vw)] shrink-0">
-					{#each pageNotes as note, j (note.id)}
+					{#each pageNotes as note (note.id)}
 						<a
 							href={`/note/${note.id}`}
 							class="flex min-h-[70px] items-center gap-2.5 py-1.5 active:opacity-60"
