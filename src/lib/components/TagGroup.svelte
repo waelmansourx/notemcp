@@ -55,9 +55,9 @@
 		if (el.scrollWidth - el.scrollLeft - el.clientWidth < 220) loadMore();
 	}
 
-	// The compact shelves are pages of three rows. A mouse-wheel/trackpad gesture
-	// should move exactly one page rather than leaving the shelf stranded halfway
-	// between columns. Touch dragging remains direct and unmodified.
+	// Compact shelves move as complete three-row pages. Wheel and trackpad
+	// gestures get a short glide; touch remains direct, then snaps to the
+	// nearest complete page when the finger lifts.
 	function onPagedWheel(event: WheelEvent) {
 		const el = event.currentTarget as HTMLElement;
 		const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
@@ -67,7 +67,7 @@
 		wheelUnlockTimer = setTimeout(() => {
 			wheelLocked = false;
 			wheelUnlockTimer = undefined;
-		}, 150);
+		}, 420);
 		if (wheelLocked) {
 			event.preventDefault();
 			return;
@@ -87,11 +87,14 @@
 
 		event.preventDefault();
 		wheelLocked = true;
-		el.scrollTo({ left: next * step, behavior: 'auto' });
+		el.scrollTo({
+			left: next * step,
+			behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'
+		});
 	}
 </script>
 
-<section class="tag-shelf min-w-0 border-b py-3" style="border-color: var(--color-border);">
+<section class="tag-shelf min-w-0 py-3">
 	<div class="flex min-w-0 items-baseline gap-3">
 		<a href={`/tags/${encodeURIComponent(tag.name)}`} class="min-w-0 active:opacity-60">
 			<span class="tag tag-lg shelf-title block truncate"><span class="shelf-hash">#</span>{label}</span>
@@ -112,7 +115,7 @@
 		<!-- The freshest tag gets the visual shelf: one large thumbnail card per
 		     note, as before. Only this first/top tag uses this treatment. -->
 		<div
-			class="shelf-scroll mt-2.5 flex max-w-full gap-3.5 overflow-x-auto pb-1"
+			class="shelf-scroll -mx-[22px] mt-2.5 flex w-[calc(100%+44px)] max-w-none gap-3.5 overflow-x-auto px-[22px] pb-1 lg:mx-0 lg:w-full lg:px-0"
 			onscroll={onShelfScroll}
 		>
 			{#each notes as note (note.id)}
@@ -172,7 +175,7 @@
 		</div>
 	{:else}
 		<div
-			class="shelf-scroll shelf-frame mt-2 flex max-w-full gap-4 overflow-x-auto px-2.5 py-1"
+			class="shelf-scroll shelf-paged shelf-frame -mx-[22px] mt-2 flex w-[calc(100%+44px)] max-w-none gap-4 overflow-x-auto px-[22px] py-1 lg:mx-0 lg:w-full lg:px-0"
 			onscroll={onShelfScroll}
 			onwheel={onPagedWheel}
 		>
@@ -236,12 +239,6 @@
 								</div>
 							</div>
 						</a>
-						{#if j < pageNotes.length - 1}
-							<div
-								class="ml-[64px] h-px"
-								style="background: color-mix(in srgb, var(--color-border) 82%, transparent);"
-							></div>
-						{/if}
 					{/each}
 				</div>
 			{/each}
@@ -266,10 +263,18 @@
 	}
 
 	.shelf-frame {
-		border-left: 3px solid
-			color-mix(in srgb, var(--color-accent-path) 46%, var(--color-border));
-		border-radius: 14px;
 		background: color-mix(in srgb, var(--color-surface-2) 58%, transparent);
+	}
+
+	.shelf-paged {
+		scroll-behavior: smooth;
+		scroll-snap-type: x mandatory;
+		scroll-padding-inline: 22px;
+	}
+
+	.shelf-paged [data-shelf-page] {
+		scroll-snap-align: start;
+		scroll-snap-stop: always;
 	}
 
 	.source-label {
@@ -280,6 +285,18 @@
 		color: var(--color-accent-path);
 		font-weight: 650;
 		letter-spacing: -0.01em;
+	}
+
+	@media (min-width: 64rem) {
+		.shelf-paged {
+			scroll-padding-inline: 0;
+		}
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.shelf-paged {
+			scroll-behavior: auto;
+		}
 	}
 
 	@media (prefers-color-scheme: dark) {
