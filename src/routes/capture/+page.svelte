@@ -7,16 +7,16 @@
 	import { queueNote, syncEntryNow } from '$lib/outbox';
 	import { addPending, removePending } from '$lib/stream.svelte';
 	import { continuation, detach, restore, touch } from '$lib/composer.svelte';
-	import { beginMediaUpload, compressImage, type PendingMedia } from '$lib/media';
+	import { ImageAttachments, imageFilesFrom } from '$lib/composer/image-attachments.svelte';
+	import { LinkPreview } from '$lib/composer/link-preview.svelte';
+	import AttachmentTray from '$lib/components/AttachmentTray.svelte';
+	import LinkPreviewCard from '$lib/components/LinkPreviewCard.svelte';
 	import { suggestions } from '$lib/cache.svelte';
 	import { QUICK_TAGS } from '$lib/types';
 	import { fly, fade } from 'svelte/transition';
 	import { quintOut } from 'svelte/easing';
 
 	const SHARE_CACHE = 'notemcp-share-v1';
-	const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
-	const MAX_SOURCE_IMAGE_BYTES = 25 * 1024 * 1024;
-	const MAX_IMAGES = 10;
 
 	const params = page.url.searchParams;
 	const rawTitle = params.get('title') ?? '';
@@ -32,10 +32,7 @@
 	// Best-effort link preview — fetched in the background and never blocks
 	// saving. If it resolves before the user taps something, it replaces the
 	// raw shared text with the page's real title.
-	let fetchedTitle = $state<string | null>(null);
-	let fetchedDescription = $state<string | null>(null);
-	let fetchedImage = $state<string | null>(null);
-	let previewLoading = $state(false);
+	const link = new LinkPreview({ url: sourceUrl });
 
 	// Shared screenshots/photos, pulled out of Cache Storage where the
 	// service worker stashed it (see src/service-worker.ts) and uploaded to
@@ -45,35 +42,24 @@
 	// resolves. If sharing happens with genuinely no connection, that
 	// request never resolves either, and the note saves as text-only rather
 	// than embedding the raw bytes.
-	type SharedImage = {
-		key: string;
-		dataUrl: string;
-		mediaId: string | null;
-		uploadStart: Promise<PendingMedia> | null;
-		uploadError: boolean;
-		processing: boolean;
-	};
-	let sharedImages = $state<SharedImage[]>([]);
-	let sharedImageError = $state<string | null>(null);
+	const sharedImages = new ImageAttachments({ onPrepared: () => captionEl?.focus() });
 	let sharedImageLoading = $state(sharedIds.length > 0);
-	let sharedImageDragging = $state(false);
 	let sharedImageInput = $state<HTMLInputElement | null>(null);
-	const sharedImagePreparations = new Set<Promise<void>>();
 
 	let fallbackTitle = $derived(
 		rawTitle ||
 			leftoverText ||
 			(sourceUrl
 				? hostname(sourceUrl)
-				: sharedIds.length || sharedImages.length
+				: sharedIds.length || sharedImages.items.length
 					? 'Shared image'
 					: 'Shared item')
 	);
 	let fallbackSubtext = $derived(
 		leftoverText && leftoverText !== fallbackTitle ? leftoverText : ''
 	);
-	let displayTitle = $derived(fetchedTitle || fallbackTitle);
-	let displaySubtext = $derived(fetchedDescription || fallbackSubtext);
+	let displayTitle = $derived(link.title || fallbackTitle);
+	let displaySubtext = $derived(link.description || fallbackSubtext);
 
 	// If you were already adding to a thread when you shared this, the share
 	// lands there too — collecting four links into one place is the whole
@@ -120,21 +106,7 @@
 	let dismissed = $state(false);
 
 	onMount(() => {
-		if (sourceUrl) {
-			previewLoading = true;
-			fetch(`/api/link-preview?url=${encodeURIComponent(sourceUrl)}`)
-				.then((r) => (r.ok ? r.json() : null))
-				.then((data) => {
-					if (!data) return;
-					fetchedTitle = data.title ?? null;
-					fetchedDescription = data.description ?? null;
-					fetchedImage = data.image ?? null;
-				})
-				.catch(() => {})
-				.finally(() => {
-					previewLoading = false;
-				});
-		}
+		if (sourceUrl) link.fetch(sourceUrl);
 
 		if (sharedIds.length > 0) {
 			(async () => {
@@ -148,7 +120,7 @@
 							return res?.blob() ?? null;
 						})
 					);
-					attachSharedImages(blobs.filter((blob): blob is Blob => blob !== null));
+					sharedImages.attach(blobs.filter((blob): blob is Blob => blob !== null));
 				} catch {
 					// no image ever arrives — just proceed as a text-only capture
 				} finally {
@@ -158,137 +130,49 @@
 		}
 	});
 
-	function dataUrlFor(blob: Blob): Promise<string> {
-		return new Promise((resolve, reject) => {
-			const reader = new FileReader();
-			reader.onload = () => resolve(reader.result as string);
-			reader.onerror = () => reject(reader.error);
-			reader.readAsDataURL(blob);
-		});
-	}
-
-	function imageFilesFrom(data: DataTransfer | null): File[] {
-		if (!data) return [];
-		const files = Array.from(data.files).filter((file) => file.type.startsWith('image/'));
-		if (files.length > 0) return files;
-		return Array.from(data.items)
-			.filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
-			.map((item) => item.getAsFile())
-			.filter((file): file is File => file !== null);
-	}
-
-	function attachSharedImages(blobs: Blob[]) {
-		const images = blobs.filter((blob) => blob.type.startsWith('image/'));
-		if (images.length === 0) return;
-		sharedImageError = null;
-		const remaining = MAX_IMAGES - sharedImages.length;
-		if (remaining <= 0) {
-			sharedImageError = `You can attach up to ${MAX_IMAGES} images.`;
-			return;
-		}
-		if (images.length > remaining) sharedImageError = `You can attach up to ${MAX_IMAGES} images.`;
-
-		for (const source of images.slice(0, remaining)) {
-			if (source.size > MAX_SOURCE_IMAGE_BYTES) {
-				sharedImageError = 'One of those images is too large to process (25MB max).';
-				continue;
-			}
-			const image = $state<SharedImage>({
-				key: crypto.randomUUID(),
-				dataUrl: '',
-				mediaId: null,
-				uploadStart: null,
-				uploadError: false,
-				processing: true
-			});
-			sharedImages.push(image);
-
-			const preparation = (async () => {
-				try {
-					const { blob } = await compressImage(source, { maxBytes: MAX_IMAGE_BYTES });
-					if (blob.size > MAX_IMAGE_BYTES) {
-						image.uploadError = true;
-						sharedImageError = 'One image is still over 4MB after compression.';
-						return;
-					}
-					image.dataUrl = await dataUrlFor(blob);
-					const started = beginMediaUpload(blob, 'image');
-					image.uploadStart = started;
-					started
-						.then(({ id, whenUploaded }) => {
-							image.mediaId = id;
-							whenUploaded.catch(() => {
-								image.mediaId = null;
-								image.uploadError = true;
-							});
-						})
-						.catch(() => (image.uploadError = true));
-				} catch {
-					image.uploadError = true;
-				} finally {
-					image.processing = false;
-					captionEl?.focus();
-				}
-			})();
-			sharedImagePreparations.add(preparation);
-			preparation.finally(() => sharedImagePreparations.delete(preparation));
-		}
-	}
-
-	function removeSharedImage(key: string) {
-		sharedImages = sharedImages.filter((image) => image.key !== key);
-		if (sharedImages.every((image) => !image.uploadError)) sharedImageError = null;
-	}
-
 	function onSharedImageChosen(event: Event) {
 		const input = event.currentTarget as HTMLInputElement;
 		const files = Array.from(input.files ?? []);
 		input.value = '';
-		attachSharedImages(files);
+		sharedImages.attach(files);
 	}
 
 	function onSharedImagePaste(event: ClipboardEvent) {
 		const files = imageFilesFrom(event.clipboardData);
 		if (files.length === 0) return;
 		event.preventDefault();
-		attachSharedImages(files);
+		sharedImages.attach(files);
 	}
 
 	function onSharedImageDragOver(event: DragEvent) {
 		if (!Array.from(event.dataTransfer?.types ?? []).includes('Files')) return;
 		event.preventDefault();
 		if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
-		sharedImageDragging = true;
+		sharedImages.dragging = true;
 	}
 
 	function onSharedImageDragLeave(event: DragEvent) {
 		const current = event.currentTarget as HTMLElement;
 		if (event.relatedTarget instanceof Node && current.contains(event.relatedTarget)) return;
-		sharedImageDragging = false;
+		sharedImages.dragging = false;
 	}
 
 	function onSharedImageDrop(event: DragEvent) {
 		event.preventDefault();
-		sharedImageDragging = false;
-		attachSharedImages(imageFilesFrom(event.dataTransfer));
+		sharedImages.dragging = false;
+		sharedImages.attach(imageFilesFrom(event.dataTransfer));
 	}
 
 	function buildContent(): string {
 		const parts: string[] = [];
-		for (const image of sharedImages) {
-			if (image.mediaId) parts.push(`![Shared image](/api/media/${image.mediaId})`);
-		}
+		const images = sharedImages.markdown('Shared image');
+		if (images) parts.push(images);
 		if (caption.trim()) parts.push(caption.trim());
 		return parts.join('\n\n');
 	}
 
 	async function finishImageStarts() {
-		await Promise.allSettled([...sharedImagePreparations]);
-		await Promise.allSettled(
-			sharedImages
-				.filter((image) => !image.mediaId && !image.uploadError)
-				.map((image) => image.uploadStart)
-		);
+		await sharedImages.waitForIds();
 	}
 
 	// Android launches a share-target navigation as a fresh activity with no
@@ -353,10 +237,10 @@
 			title: displayTitle,
 			content_markdown: buildContent(),
 			source_url: sourceUrl,
-			source_type: sourceUrl || sharedImages.length ? 'share' : null,
-			source_title: fetchedTitle,
-			source_description: fetchedDescription,
-			source_image: fetchedImage,
+			source_type: sourceUrl || sharedImages.items.length ? 'share' : null,
+			source_title: link.title,
+			source_description: link.description,
+			source_image: link.image,
 			parent_id: continuation.target?.id ?? null,
 			tagNames: [...new Set(allTags.map(normalizeTagName).filter(Boolean))]
 		});
@@ -369,12 +253,7 @@
 		// image path used to do — is what made saving a shared photo feel like
 		// the app had hung.
 		addPending(entry);
-		const uploadsFinished = Promise.allSettled(
-			sharedImages.map(async (image) => {
-				const pending = await image.uploadStart;
-				if (pending) await pending.whenUploaded;
-			})
-		);
+		const uploadsFinished = sharedImages.waitForUploads();
 		leave(
 			Promise.all([
 				syncEntryNow(entry).then((noteId) => {
@@ -395,9 +274,9 @@
 		const content = buildContent() || caption || leftoverText;
 		if (content) q.set('content', content);
 		if (sourceUrl) q.set('source_url', sourceUrl);
-		if (fetchedTitle) q.set('source_title', fetchedTitle);
-		if (fetchedDescription) q.set('source_description', fetchedDescription);
-		if (fetchedImage) q.set('source_image', fetchedImage);
+		if (link.title) q.set('source_title', link.title);
+		if (link.description) q.set('source_description', link.description);
+		if (link.image) q.set('source_image', link.image);
 		goto(`/note/new?${q.toString()}`);
 	}
 </script>
@@ -426,7 +305,7 @@
 		-->
 		<div
 			class="flex max-h-[92vh] flex-col rounded-t-[1.375rem] px-[1.125rem] pt-[0.625rem]"
-			style={sharedImageDragging
+			style={sharedImages.dragging
 				? 'background: var(--color-surface); --fade-to: var(--color-surface); box-shadow: inset 0 0 0 3px var(--color-accent), 0 -8px 34px rgba(0,0,0,.16); padding-bottom: calc(0.75rem + env(safe-area-inset-bottom));'
 				: 'background: var(--color-surface); --fade-to: var(--color-surface); box-shadow: 0 -8px 34px rgba(0,0,0,.16); padding-bottom: calc(0.75rem + env(safe-area-inset-bottom));'}
 			transition:fly={{ y: 420, duration: 320, easing: quintOut }}
@@ -461,92 +340,19 @@
 							style="border-color: var(--color-border); border-top-color: var(--color-accent);"
 						></div>
 					</div>
-				{:else if sharedImages.length > 0}
-					<div class="mb-3 flex gap-2 overflow-x-auto pt-1 pr-1">
-						{#each sharedImages as image (image.key)}
-							<div class="relative shrink-0">
-								{#if image.dataUrl}
-									<img
-										src={image.dataUrl}
-										alt=""
-										class="h-32 w-32 rounded-[16px] object-cover"
-										class:opacity-50={image.processing || image.uploadError}
-										style="background: var(--color-surface-2);"
-									/>
-								{:else}
-									<div
-										class="h-32 w-32 animate-pulse rounded-[16px]"
-										style="background: var(--color-surface-2);"
-									></div>
-								{/if}
-								{#if image.processing}
-									<span
-										class="absolute inset-0 grid place-items-center text-[0.68rem] font-bold"
-										style="color: var(--color-ink-muted);"
-									>
-										Compressing
-									</span>
-								{/if}
-								<button
-									type="button"
-									aria-label="Remove image"
-									class="absolute -top-1 -right-1 grid h-7 w-7 place-items-center rounded-full text-xs"
-									style="background: var(--color-ink); color: var(--color-bg);"
-									onclick={() => removeSharedImage(image.key)}
-								>
-									✕
-								</button>
-							</div>
-						{/each}
-					</div>
+				{:else}
+					<AttachmentTray attachments={sharedImages} size="large" class="mb-3" />
 				{/if}
 
-				{#if sharedImages.length === 0 || sourceUrl}
-					<div
-						class="mb-3 flex items-start gap-3 border-b pb-3"
-						style="border-color: var(--color-border);"
-					>
-						{#if fetchedImage}
-							<img
-								src={fetchedImage}
-								alt=""
-								class="h-[52px] w-[52px] shrink-0 rounded-[13px] object-cover"
-								style="background: var(--color-surface);"
-							/>
-						{/if}
-						<div class="min-w-0 flex-1">
-							{#if sourceUrl}
-								<p
-									class="mb-0.5 truncate text-[0.68rem] font-extrabold tracking-[0.04em] uppercase"
-									style="color: var(--color-ink-faint);"
-								>
-									{hostname(sourceUrl)}
-								</p>
-							{/if}
-							<p class="line-clamp-2 text-[0.88rem] leading-[1.3] font-semibold tracking-[-0.01em]">
-								{displayTitle}
-							</p>
-							{#if displaySubtext}
-								<p
-									class="mt-0.5 line-clamp-1 text-[0.78rem]"
-									style="color: var(--color-ink-muted);"
-								>
-									{displaySubtext}
-								</p>
-							{:else if previewLoading}
-								<div
-									class="mt-1.5 h-2 w-2/3 animate-pulse rounded-full"
-									style="background: var(--color-surface);"
-								></div>
-							{/if}
-						</div>
-					</div>
-				{/if}
-
-				{#if sharedImageError || sharedImages.some((image) => image.uploadError)}
-					<p class="mb-2 text-[0.78rem]" style="color: var(--color-danger);">
-						{sharedImageError ?? "Couldn't upload one or more images — remove them or try again."}
-					</p>
+				{#if sharedImages.items.length === 0 || sourceUrl}
+					<LinkPreviewCard
+						preview={link}
+						mode="capture"
+						fallbackTitle={displayTitle}
+						fallbackDescription={displaySubtext}
+						removable={false}
+						class="mb-3"
+					/>
 				{/if}
 
 				<!-- svelte-ignore a11y_autofocus (a capture-only route should open ready to type) -->

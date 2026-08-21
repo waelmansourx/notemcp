@@ -104,6 +104,7 @@ describe('toolbar block commands', () => {
 		expect(format('task', '- milk')).toBe('- [ ] milk');
 		expect(format('bullet', '- [ ] milk')).toBe('- milk');
 		expect(format('heading', '- [ ] hi')).toBe('# hi');
+		expect(format('ordered', '- hi')).toBe('1. hi');
 	});
 
 	test('indentation survives a toggle', () => {
@@ -138,6 +139,11 @@ describe('toolbar block commands', () => {
 	test('keeps the caret with its text when a marker is removed', () => {
 		expect(format('task', '- [ ] milk', { anchor: 6, head: 6 }, true)).toBe('|milk');
 	});
+
+	test('the ordered-list button toggles a numbered marker', () => {
+		expect(format('ordered', 'first')).toBe('1. first');
+		expect(format('ordered', '3. first')).toBe('first');
+	});
 });
 
 describe('toolbar inline commands', () => {
@@ -148,6 +154,12 @@ describe('toolbar inline commands', () => {
 
 	test('bold with no selection leaves the caret between the markers', () => {
 		expect(format('bold', 'x', undefined, true)).toBe('x**|**');
+	});
+
+	test('italic and code wrap selections without adding extra controls to the document', () => {
+		expect(format('italic', 'milk', { anchor: 0, head: 4 })).toBe('*milk*');
+		expect(format('italic', '*milk*', { anchor: 1, head: 5 })).toBe('milk');
+		expect(format('code', 'npm run', { anchor: 0, head: 7 })).toBe('`npm run`');
 	});
 
 	test('link puts the caret where the next thing to type goes', () => {

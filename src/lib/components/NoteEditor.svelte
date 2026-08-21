@@ -3,24 +3,30 @@
 	import { goto } from '$app/navigation';
 	import MarkdownEditor from '$lib/components/MarkdownEditor.svelte';
 	import EditorToolbar from '$lib/components/EditorToolbar.svelte';
-	import { hostname, timeOfDay } from '$lib/dates';
+	import { timeOfDay } from '$lib/dates';
 	import { clearDraft, isNewerThan, pruneDrafts, readDraft, saveDraft } from '$lib/draft.svelte';
 	import { addPending, asNote, isPending, settlePending } from '$lib/stream.svelte';
 	import { queueNote, queueEdit, removeEdit, removeFromOutbox, syncEntry } from '$lib/outbox';
-	import { beginMediaUpload, type PendingMedia } from '$lib/media';
+	import { ImageAttachments } from '$lib/composer/image-attachments.svelte';
+	import { LinkPreview } from '$lib/composer/link-preview.svelte';
 	import { normalizeTagName } from '$lib/tags';
 	import { showToast } from '$lib/toast.svelte';
+	import { takeEditorHandoff } from '$lib/editor-handoff';
 	import Thought from './Thought.svelte';
+	import AttachmentTray from './AttachmentTray.svelte';
+	import LinkPreviewCard from './LinkPreviewCard.svelte';
 	import type { Note } from '$lib/types';
 
 	let {
 		existingNote = null,
 		prefill = null,
-		thread = []
+		thread = [],
+		handoffKey = null
 	}: {
 		existingNote?: Note | null;
 		/** Every thought in this thread, oldest first, including this one. */
 		thread?: Note[];
+		handoffKey?: string | null;
 		prefill?: {
 			title?: string;
 			content_markdown?: string;
@@ -72,7 +78,9 @@
 		existingNote?.source_description ?? prefill?.source_description ?? null
 	);
 	let linkImage = $state(existingNote?.source_image ?? prefill?.source_image ?? null);
+	const link = new LinkPreview();
 	let pinned = $state(existingNote?.pinned ?? false);
+	let createParentId = $state<string | null>(null);
 	let tags = $state<{ id: string | null; name: string }[]>(
 		existingNote?.tags.map((t) => ({ id: t.id, name: t.name })) ?? []
 	);
@@ -82,9 +90,95 @@
 	let tagError = $state('');
 	let saveState = $state<'idle' | 'saving' | 'saved' | 'queued'>('idle');
 	let deleting = $state(false);
+	let confirmingDelete = $state(false);
 
 	let editor = $state<ReturnType<typeof MarkdownEditor> | null>(null);
 	let editorFocused = $state(false);
+	let editorPhotoInput = $state<HTMLInputElement | null>(null);
+	let editorPhotoBusy = $state(false);
+	let editorPhotoError = $state<string | null>(null);
+	const editorPhotos = new ImageAttachments();
+	let adoptedHandoff = false;
+
+	onMount(() => {
+		if (!handoffKey || existingNote) return;
+		const handoff = takeEditorHandoff(handoffKey);
+		if (!handoff) return;
+		adoptedHandoff = true;
+		content = handoff.content;
+		tags = handoff.tags.map((name) => ({ id: null, name }));
+		createParentId = handoff.parentId;
+		sourceUrl = handoff.sourceUrl;
+		linkTitle = handoff.sourceTitle;
+		linkDescription = handoff.sourceDescription;
+		linkImage = handoff.sourceImage;
+		syncLinkController();
+	});
+
+	function syncLinkController() {
+		link.restore({
+			url: sourceUrl,
+			title: linkTitle,
+			description: linkDescription,
+			image: linkImage
+		});
+	}
+	syncLinkController();
+
+	async function handleLinkPaste(url: string) {
+		const pending = link.fetch(url);
+		sourceUrl = link.url;
+		linkTitle = null;
+		linkDescription = null;
+		linkImage = null;
+		await pending;
+		if (link.url !== url) return;
+		sourceUrl = link.url;
+		linkTitle = link.title;
+		linkDescription = link.description;
+		linkImage = link.image;
+	}
+
+	function removeLinkPreview() {
+		link.clear();
+		sourceUrl = null;
+		linkTitle = null;
+		linkDescription = null;
+		linkImage = null;
+	}
+
+	function pickEditorPhotos() {
+		editorPhotoInput?.click();
+	}
+
+	function onEditorPhotosChosen(event: Event) {
+		const input = event.currentTarget as HTMLInputElement;
+		const files = Array.from(input.files ?? []);
+		input.value = '';
+		attachEditorPhotos(files);
+	}
+
+	async function attachEditorPhotos(files: File[]) {
+		const images = files.filter((file) => file.type.startsWith('image/')).slice(0, 10);
+		if (images.length === 0 || editorPhotoBusy) return;
+		editorPhotoBusy = true;
+		editorPhotoError = null;
+		editorPhotos.clear();
+		editorPhotos.attach(images);
+		await editorPhotos.waitForUploads();
+		const ids = editorPhotos.items
+			.filter((item) => item.mediaId && !item.uploadError)
+			.map((item) => item.mediaId as string);
+		if (ids.length > 0) editor?.insertBlock(ids.map((id) => `![](/api/media/${id})`).join('\n\n'));
+		if (ids.length !== images.length) {
+			editorPhotoError =
+				ids.length > 0
+					? "Some images couldn't be attached."
+					: "Couldn't attach those images — use files under 25MB and try again.";
+		}
+		editorPhotos.clear();
+		editorPhotoBusy = false;
+	}
 
 	// Only one bar sits above the keyboard: formatting while you're writing,
 	// tags when you're not. Hiding lags focus slightly so that a tap which
@@ -139,13 +233,31 @@
 	 */
 	const AUTOSAVE_MS = 5000;
 
-	type Snapshot = { title: string; content: string; pinned: boolean; tags: string };
+	type Snapshot = {
+		title: string;
+		content: string;
+		pinned: boolean;
+		tags: string;
+		sourceUrl: string | null;
+		sourceTitle: string | null;
+		sourceDescription: string | null;
+		sourceImage: string | null;
+	};
 
 	// \u0000 can't appear in a tag name, so joining on it can't collide.
 	const TAG_SEP = '\u0000';
 
 	function snapshot(): Snapshot {
-		return { title, content, pinned, tags: tags.map((t) => t.name).join(TAG_SEP) };
+		return {
+			title,
+			content,
+			pinned,
+			tags: tags.map((t) => t.name).join(TAG_SEP),
+			sourceUrl,
+			sourceTitle: linkTitle,
+			sourceDescription: linkDescription,
+			sourceImage: linkImage
+		};
 	}
 
 	/** The same shape, read off a note as the server sent it. */
@@ -154,13 +266,24 @@
 			title: note.title,
 			content: note.content_markdown,
 			pinned: note.pinned,
-			tags: note.tags.map((t) => t.name).join(TAG_SEP)
+			tags: note.tags.map((t) => t.name).join(TAG_SEP),
+			sourceUrl: note.source_url,
+			sourceTitle: note.source_title,
+			sourceDescription: note.source_description,
+			sourceImage: note.source_image
 		};
 	}
 
 	function same(a: Snapshot, b: Snapshot): boolean {
 		return (
-			a.title === b.title && a.content === b.content && a.pinned === b.pinned && a.tags === b.tags
+			a.title === b.title &&
+			a.content === b.content &&
+			a.pinned === b.pinned &&
+			a.tags === b.tags &&
+			a.sourceUrl === b.sourceUrl &&
+			a.sourceTitle === b.sourceTitle &&
+			a.sourceDescription === b.sourceDescription &&
+			a.sourceImage === b.sourceImage
 		);
 	}
 
@@ -188,9 +311,9 @@
 	}
 
 	let saved: Snapshot | null = existingNote ? (serverState.get(existingNote.id) ?? null) : null;
-	// Stable for the life of this editor, so a note that hasn't been created
-	// yet still has somewhere consistent to keep its draft.
-	const clientId = crypto.randomUUID();
+	// Stable for the life of this editor — and across a refresh while a composer
+	// handoff is still in the URL — so a new note can recover its local draft.
+	const clientId = handoffKey ?? crypto.randomUUID();
 	let inFlight = false;
 	let queuedAgain = false;
 
@@ -208,7 +331,12 @@
 		saveDraft(draftKey, {
 			title: next.title,
 			content: next.content,
-			tags: tags.map((t) => t.name)
+			tags: tags.map((t) => t.name),
+			sourceUrl: next.sourceUrl,
+			sourceTitle: next.sourceTitle,
+			sourceDescription: next.sourceDescription,
+			sourceImage: next.sourceImage,
+			parentId: createParentId
 		});
 
 		const timer = setTimeout(persist, AUTOSAVE_MS);
@@ -240,7 +368,16 @@
 
 	function commitToThread(
 		noteId: string | null,
-		values: { title: string; content: string; pinned: boolean; tags: { id: string | null; name: string }[] }
+		values: {
+			title: string;
+			content: string;
+			pinned: boolean;
+			tags: { id: string | null; name: string }[];
+			sourceUrl: string | null;
+			sourceTitle: string | null;
+			sourceDescription: string | null;
+			sourceImage: string | null;
+		}
 	) {
 		if (!noteId) return;
 		threadItems = threadItems.map((n) =>
@@ -250,6 +387,10 @@
 						title: values.title,
 						content_markdown: values.content,
 						pinned: values.pinned,
+						source_url: values.sourceUrl,
+						source_title: values.sourceTitle,
+						source_description: values.sourceDescription,
+						source_image: values.sourceImage,
 						tags: values.tags.map((t) => ({ id: t.id ?? LOCAL_TAG + t.name, name: t.name }))
 					}
 				: n
@@ -271,8 +412,33 @@
 	 */
 	onMount(() => {
 		pruneDrafts();
+		if (!existingNote && !adoptedHandoff) {
+			const draft = readDraft(clientId);
+			if (draft) {
+				title = draft.title;
+				content = draft.content;
+				tags = draft.tags.map((name) => ({ id: null, name }));
+				if (draft.sourceUrl !== undefined) sourceUrl = draft.sourceUrl;
+				if (draft.sourceTitle !== undefined) linkTitle = draft.sourceTitle;
+				if (draft.sourceDescription !== undefined) linkDescription = draft.sourceDescription;
+				if (draft.sourceImage !== undefined) linkImage = draft.sourceImage;
+				if (draft.parentId !== undefined) createParentId = draft.parentId;
+			}
+		}
+		syncLinkController();
 
-		const recovered = new Map<string, { title: string; content: string; tags: string[] }>();
+		const recovered = new Map<
+			string,
+			{
+				title: string;
+				content: string;
+				tags: string[];
+				sourceUrl?: string | null;
+				sourceTitle?: string | null;
+				sourceDescription?: string | null;
+				sourceImage?: string | null;
+			}
+		>();
 		for (const item of threadItems) {
 			const server = serverState.get(item.id);
 			if (!server) continue;
@@ -283,7 +449,14 @@
 			// Compared against the server's copy, never against what's on
 			// screen — by the time this runs the two can already differ.
 			const stale = !isNewerThan(draft, item.updated_at);
-			const redundant = draft.content === server.content && draft.title === server.title;
+			const redundant =
+				draft.content === server.content &&
+				draft.title === server.title &&
+				(draft.sourceUrl === undefined || draft.sourceUrl === server.sourceUrl) &&
+				(draft.sourceTitle === undefined || draft.sourceTitle === server.sourceTitle) &&
+				(draft.sourceDescription === undefined ||
+					draft.sourceDescription === server.sourceDescription) &&
+				(draft.sourceImage === undefined || draft.sourceImage === server.sourceImage);
 			if (stale || redundant) {
 				clearDraft(item.id);
 				continue;
@@ -301,6 +474,13 @@
 						...n,
 						title: draft.title,
 						content_markdown: draft.content,
+						source_url: draft.sourceUrl === undefined ? n.source_url : draft.sourceUrl,
+						source_title: draft.sourceTitle === undefined ? n.source_title : draft.sourceTitle,
+						source_description:
+							draft.sourceDescription === undefined
+								? n.source_description
+								: draft.sourceDescription,
+						source_image: draft.sourceImage === undefined ? n.source_image : draft.sourceImage,
 						tags: draft.tags.map((name) => ({ id: LOCAL_TAG + name, name }))
 					}
 				: n;
@@ -311,6 +491,11 @@
 			title = mine.title;
 			content = mine.content;
 			tags = mine.tags.map((name) => ({ id: null, name }));
+			if (mine.sourceUrl !== undefined) sourceUrl = mine.sourceUrl;
+			if (mine.sourceTitle !== undefined) linkTitle = mine.sourceTitle;
+			if (mine.sourceDescription !== undefined) linkDescription = mine.sourceDescription;
+			if (mine.sourceImage !== undefined) linkImage = mine.sourceImage;
+			syncLinkController();
 		}
 	});
 
@@ -360,6 +545,15 @@
 			if (!base || base.title !== next.title) patch.title = next.title;
 			if (!base || base.content !== next.content) patch.content_markdown = next.content;
 			if (!base || base.pinned !== next.pinned) patch.pinned = next.pinned;
+			if (!base || base.sourceUrl !== next.sourceUrl) {
+				patch.source_url = next.sourceUrl;
+				patch.source_type = next.sourceUrl ? 'share' : 'manual';
+			}
+			if (!base || base.sourceTitle !== next.sourceTitle) patch.source_title = next.sourceTitle;
+			if (!base || base.sourceDescription !== next.sourceDescription) {
+				patch.source_description = next.sourceDescription;
+			}
+			if (!base || base.sourceImage !== next.sourceImage) patch.source_image = next.sourceImage;
 			// Sending tagNames rewrites every note_tags row for this note, so
 			// it only goes out when the tags themselves have changed.
 			if (!base || base.tags !== next.tags) patch.tagNames = persistingTags.map((t) => t.name);
@@ -389,12 +583,12 @@
 					client_id: clientId,
 					title: next.title,
 					content_markdown: next.content,
-					source_url: sourceUrl,
-					source_type: sourceUrl ? 'share' : 'manual',
-					source_title: linkTitle,
-					source_description: linkDescription,
-					source_image: linkImage,
-					parent_id: null,
+					source_url: next.sourceUrl,
+					source_type: next.sourceUrl ? 'share' : 'manual',
+					source_title: next.sourceTitle,
+					source_description: next.sourceDescription,
+					source_image: next.sourceImage,
+					parent_id: createParentId,
 					tagNames: persistingTags.map((t) => t.name)
 				});
 			}
@@ -411,11 +605,12 @@
 						client_id: clientId,
 						title: next.title,
 						content_markdown: next.content,
-						source_url: sourceUrl,
-						source_type: sourceUrl ? 'share' : 'manual',
-						source_title: linkTitle,
-						source_description: linkDescription,
-						source_image: linkImage,
+						source_url: next.sourceUrl,
+						source_type: next.sourceUrl ? 'share' : 'manual',
+						source_title: next.sourceTitle,
+						source_description: next.sourceDescription,
+						source_image: next.sourceImage,
+						parent_id: createParentId,
 						pinned: next.pinned,
 						tagNames: persistingTags.map((t) => t.name)
 					})
@@ -480,7 +675,11 @@
 					title: next.title,
 					content: next.content,
 					pinned: next.pinned,
-					tags: tagsUnchanged ? confirmedTags! : persistingTags
+					tags: tagsUnchanged ? confirmedTags! : persistingTags,
+					sourceUrl: next.sourceUrl,
+					sourceTitle: next.sourceTitle,
+					sourceDescription: next.sourceDescription,
+					sourceImage: next.sourceImage
 				});
 				// Swapping the real ids in lets a tag that was just created be
 				// renamed without a reload. Safe against re-triggering autosave:
@@ -545,7 +744,16 @@
 		// you actually typed, and on the wire. persist() reads `id`
 		// synchronously before its first await, so it's guaranteed to save the
 		// outgoing thought, not the one we're about to switch to.
-		commitToThread(id, { title, content, pinned, tags });
+		commitToThread(id, {
+			title,
+			content,
+			pinned,
+			tags,
+			sourceUrl,
+			sourceTitle: linkTitle,
+			sourceDescription: linkDescription,
+			sourceImage: linkImage
+		});
 		persist();
 
 		id = target.id;
@@ -555,6 +763,7 @@
 		linkTitle = target.source_title;
 		linkDescription = target.source_description;
 		linkImage = target.source_image;
+		syncLinkController();
 		pinned = target.pinned;
 		tags = editableTags(target);
 		/*
@@ -591,13 +800,8 @@
 	let addText = $state('');
 	let addTextarea = $state<HTMLTextAreaElement | null>(null);
 	let addPhotoInput = $state<HTMLInputElement | null>(null);
-	let addPhotoDataUrl = $state<string | null>(null);
-	let addPhotoMediaId = $state<string | null>(null);
-	let addPhotoUploadStart = $state<Promise<PendingMedia> | null>(null);
-	let addPhotoUploadError = $state(false);
-	let addPhotoTooLarge = $state(false);
+	const addPhotos = new ImageAttachments({ maxCount: 1, onPrepared: () => addTextarea?.focus() });
 	let addBusy = $state(false);
-	const MAX_ADD_PHOTO_BYTES = 4 * 1024 * 1024;
 
 	// The same crash mat every other composer in this app gets: written to
 	// localStorage on every change, synchronously, so a backgrounded tab or a
@@ -619,7 +823,7 @@
 		else saveDraft(addDraftKey, { title: '', content, tags: [] });
 	});
 
-	let addHasContent = $derived(addText.trim().length > 0 || Boolean(addPhotoDataUrl));
+	let addHasContent = $derived(addText.trim().length > 0 || addPhotos.items.length > 0);
 
 	function pickAddPhoto() {
 		addPhotoInput?.click();
@@ -630,44 +834,18 @@
 		const file = input.files?.[0];
 		input.value = '';
 		if (!file) return;
-
-		addPhotoTooLarge = file.size > MAX_ADD_PHOTO_BYTES;
-		if (addPhotoTooLarge) return;
-
-		addPhotoMediaId = null;
-		addPhotoUploadError = false;
-		const reader = new FileReader();
-		reader.onload = () => (addPhotoDataUrl = reader.result as string);
-		reader.readAsDataURL(file);
-
-		const started = beginMediaUpload(file, 'image');
-		addPhotoUploadStart = started;
-		started
-			.then(({ id: mediaId, whenUploaded }) => {
-				if (addPhotoUploadStart !== started) return; // superseded by a later pick/clear
-				addPhotoMediaId = mediaId;
-				whenUploaded.catch(() => {
-					if (addPhotoUploadStart !== started) return;
-					addPhotoMediaId = null;
-					addPhotoUploadError = true;
-				});
-			})
-			.catch(() => {
-				if (addPhotoUploadStart === started) addPhotoUploadError = true;
-			});
+		addPhotos.clear();
+		addPhotos.attach([file]);
 	}
 
 	function clearAddPhoto() {
-		addPhotoDataUrl = null;
-		addPhotoMediaId = null;
-		addPhotoUploadStart = null;
-		addPhotoUploadError = false;
-		addPhotoTooLarge = false;
+		addPhotos.clear();
 	}
 
 	function buildAddContent(): string {
 		const parts: string[] = [];
-		if (addPhotoMediaId) parts.push(`![](/api/media/${addPhotoMediaId})`);
+		const image = addPhotos.markdown();
+		if (image) parts.push(image);
 		const t = addText.trim();
 		if (t) parts.push(t);
 		return parts.join('\n\n');
@@ -677,9 +855,7 @@
 		if (!addHasContent || addBusy) return;
 		addBusy = true;
 
-		if (addPhotoDataUrl && !addPhotoMediaId && addPhotoUploadStart && !addPhotoUploadError) {
-			await addPhotoUploadStart.catch(() => {});
-		}
+		await addPhotos.waitForIds();
 
 		const content = buildAddContent();
 		if (!content) {
@@ -727,7 +903,11 @@
 					title: entry.title,
 					content: entry.content_markdown,
 					pinned: false,
-					tags: entry.tagNames.join(TAG_SEP)
+					tags: entry.tagNames.join(TAG_SEP),
+					sourceUrl: null,
+					sourceTitle: null,
+					sourceDescription: null,
+					sourceImage: null
 				});
 			},
 			() => showToast('Saved on this device — will sync', { duration: 2600 })
@@ -735,7 +915,7 @@
 	}
 
 	function addTag() {
-		const t = tagInput.trim().toLowerCase().replace(/^#/, '');
+		const t = normalizeTagName(tagInput);
 		if (t && !tags.some((x) => x.name === t)) tags = [...tags, { id: null, name: t }];
 		tagInput = '';
 	}
@@ -758,7 +938,7 @@
 	async function commitEditTag() {
 		const index = editingTagIndex;
 		if (index === null) return;
-		const name = editTagValue.trim().toLowerCase().replace(/^#/, '');
+		const name = normalizeTagName(editTagValue);
 		const tag = tags[index];
 
 		if (!name) {
@@ -826,7 +1006,7 @@
 					source_title: linkTitle,
 					source_description: linkDescription,
 					source_image: linkImage,
-					parent_id: null,
+					parent_id: createParentId,
 					tagNames: tags.map((t) => t.name)
 				})
 			);
@@ -835,14 +1015,29 @@
 		goto('/');
 	}
 
+	function requestDelete() {
+		confirmingDelete = true;
+	}
+
 	async function deleteNote() {
 		if (!id) {
 			goto('/');
 			return;
 		}
 		deleting = true;
-		await fetch(`/api/notes/${id}`, { method: 'DELETE' });
-		goto('/');
+		try {
+			const res = await fetch(`/api/notes/${id}`, { method: 'DELETE' });
+			if (!res.ok) {
+				showToast("Couldn't delete that note — try again", { duration: 3000 });
+				return;
+			}
+			goto('/');
+		} catch {
+			showToast("Couldn't delete that note — check your connection", { duration: 3000 });
+		} finally {
+			deleting = false;
+			confirmingDelete = false;
+		}
 	}
 </script>
 
@@ -875,9 +1070,9 @@
 		     letting it read as lost. -->
 		<span class="text-xs" style="color: var(--color-ink-faint);">
 			{saveState === 'saving'
-				? 'Saving…'
+				? 'Syncing…'
 				: saveState === 'saved'
-					? 'Saved'
+					? 'Synced'
 					: saveState === 'queued'
 						? 'Saved on this device'
 						: ''}
@@ -903,10 +1098,27 @@
 					/></svg
 				>
 			</button>
-			{#if id}
+			{#if id && confirmingDelete}
+				<div class="flex items-center gap-1">
+					<button
+						type="button"
+						disabled={deleting}
+						class="h-8 rounded-full px-2.5 text-xs font-semibold"
+						style="color: var(--color-ink-muted);"
+						onclick={() => (confirmingDelete = false)}>Cancel</button
+					>
+					<button
+						type="button"
+						disabled={deleting}
+						class="h-8 rounded-full px-3 text-xs font-bold disabled:opacity-50"
+						style="background: var(--color-danger-soft); color: var(--color-danger);"
+						onclick={deleteNote}>{deleting ? 'Deleting…' : 'Delete'}</button
+					>
+				</div>
+			{:else if id}
 				<button
-					onclick={deleteNote}
-					disabled={deleting}
+					type="button"
+					onclick={requestDelete}
 					aria-label="Delete note"
 					class="flex h-9 w-9 items-center justify-center rounded-full"
 					style="color: var(--color-ink-muted);"
@@ -932,11 +1144,7 @@
 	{#if before.length > 0}
 		<div class="mb-3 space-y-3">
 			{#each before as thought (thought.id)}
-				<Thought
-					note={thought}
-					href={null}
-					onnavigate={isPending(thought) ? null : switchTo}
-				/>
+				<Thought note={thought} href={null} onnavigate={isPending(thought) ? null : switchTo} />
 			{/each}
 		</div>
 	{/if}
@@ -968,64 +1176,18 @@
 			</p>
 		{/if}
 
-		{#if sourceUrl}
-			<a
-				href={sourceUrl}
-				target="_blank"
-				rel="noopener noreferrer"
-				class="mb-3 inline-flex w-fit items-center gap-1.5 rounded-full px-3 py-1.5 text-xs"
-				style="background: var(--color-surface-2); color: var(--color-ink-muted);"
-			>
-				<svg
-					width="11"
-					height="11"
-					viewBox="0 0 24 24"
-					fill="none"
-					stroke="currentColor"
-					stroke-width="2.2"
-					stroke-linecap="round"
-					stroke-linejoin="round"
-					><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><path
-						d="M15 3h6v6"
-					/><path d="M10 14 21 3" /></svg
-				>
-				{hostname(sourceUrl)}
-			</a>
-		{/if}
+		<LinkPreviewCard preview={link} onremove={removeLinkPreview} class="mb-4" />
 
-		{#if linkImage || linkTitle || linkDescription}
-			<a
-				href={sourceUrl ?? undefined}
-				target={sourceUrl ? '_blank' : undefined}
-				rel={sourceUrl ? 'noopener noreferrer' : undefined}
-				class="mb-4 flex gap-3 rounded-[var(--radius-lg)] p-3"
-				style="background: var(--color-surface-2);"
-			>
-				{#if linkImage}
-					<img
-						src={linkImage}
-						alt=""
-						class="h-16 w-16 shrink-0 rounded-[var(--radius-sm)] object-cover"
-						style="background: var(--color-surface);"
-					/>
-				{/if}
-				<div class="min-w-0 flex-1">
-					{#if linkTitle}
-						<p class="truncate text-sm font-medium" style="color: var(--color-ink);">{linkTitle}</p>
-					{/if}
-					{#if linkDescription}
-						<p
-							class="mt-0.5 line-clamp-2 text-xs leading-snug"
-							style="color: var(--color-ink-muted);"
-						>
-							{linkDescription}
-						</p>
-					{/if}
-				</div>
-			</a>
+		<MarkdownEditor
+			bind:this={editor}
+			bind:value={content}
+			bind:focused={editorFocused}
+			onlinkpaste={handleLinkPaste}
+			onimages={attachEditorPhotos}
+		/>
+		{#if editorPhotoError}
+			<p class="mt-2 text-xs" style="color: var(--color-danger);">{editorPhotoError}</p>
 		{/if}
-
-		<MarkdownEditor bind:this={editor} bind:value={content} bind:focused={editorFocused} />
 
 		<!-- Tags placed cleanly inside the card footer -->
 		<div class="mt-3 flex flex-wrap items-center gap-1.5 pt-1">
@@ -1072,7 +1234,15 @@
 							class="flex h-3.5 w-3.5 items-center justify-center opacity-60 hover:opacity-100"
 							style="color: var(--color-ink-muted);"
 						>
-							<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+							<svg
+								width="10"
+								height="10"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="2.5"
+								stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg
+							>
 						</button>
 					</span>
 				{/if}
@@ -1091,7 +1261,7 @@
 				}}
 				onblur={addTag}
 				placeholder={tags.length ? '+ Tag' : '+ Add tag'}
-				class="bg-transparent py-0.5 px-1 text-xs font-medium outline-none"
+				class="bg-transparent px-1 py-0.5 text-xs font-medium outline-none"
 				style="color: var(--color-ink-muted);"
 			/>
 		</div>
@@ -1103,18 +1273,26 @@
 			class="sticky bottom-0 -mx-4 flex flex-wrap items-center gap-1.5 px-4 pt-2 pb-2"
 			style="background: var(--color-bg);"
 		>
-			<EditorToolbar onaction={(action) => editor?.applyFormat(action)} />
+			<EditorToolbar
+				onaction={(action) => editor?.applyFormat(action)}
+				onphoto={pickEditorPhotos}
+				photoBusy={editorPhotoBusy}
+			/>
+			<input
+				bind:this={editorPhotoInput}
+				type="file"
+				accept="image/*"
+				multiple
+				class="hidden"
+				onchange={onEditorPhotosChosen}
+			/>
 		</div>
 	{/if}
 
 	{#if after.length > 0}
 		<div class="mt-3 space-y-3">
 			{#each after as thought (thought.id)}
-				<Thought
-					note={thought}
-					href={null}
-					onnavigate={isPending(thought) ? null : switchTo}
-				/>
+				<Thought note={thought} href={null} onnavigate={isPending(thought) ? null : switchTo} />
 			{/each}
 		</div>
 	{/if}
@@ -1131,35 +1309,7 @@
 			class="mt-7 flex flex-col gap-2 rounded-[var(--radius-lg)] p-3"
 			style="background: var(--color-surface-2);"
 		>
-			{#if addPhotoDataUrl}
-				<div class="relative inline-block w-fit">
-					<img
-						src={addPhotoDataUrl}
-						alt=""
-						class="h-20 w-20 rounded-[var(--radius-lg)] object-cover"
-						style="background: var(--color-surface);"
-					/>
-					<button
-						type="button"
-						aria-label="Remove photo"
-						class="absolute -top-1.5 -right-1.5 grid h-5 w-5 place-items-center rounded-full text-[10px]"
-						style="background: var(--color-ink); color: var(--color-bg);"
-						onclick={clearAddPhoto}
-					>
-						✕
-					</button>
-				</div>
-			{/if}
-			{#if addPhotoTooLarge}
-				<p class="text-[0.78rem]" style="color: var(--color-danger);">
-					That photo's too large to attach right now (4MB max).
-				</p>
-			{/if}
-			{#if addPhotoUploadError}
-				<p class="text-[0.78rem]" style="color: var(--color-danger);">
-					Couldn't upload that photo — check your connection and try again.
-				</p>
-			{/if}
+			<AttachmentTray attachments={addPhotos} />
 
 			<textarea
 				bind:this={addTextarea}
@@ -1172,8 +1322,7 @@
 						e.preventDefault();
 						addThought();
 					}
-				}}
-			></textarea>
+				}}></textarea>
 
 			<div class="flex items-center gap-2">
 				<button

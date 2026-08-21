@@ -17,11 +17,23 @@ const { saveDraft, readDraft, clearDraft, isNewerThan, pruneDrafts } =
 beforeEach(() => store.clear());
 
 test('a draft round-trips', () => {
-	saveDraft('n1', { title: 'T', content: 'body', tags: ['a', 'b'] });
+	saveDraft('n1', {
+		title: 'T',
+		content: 'body',
+		tags: ['a', 'b'],
+		sourceUrl: 'https://example.com/',
+		sourceTitle: 'Example',
+		sourceDescription: null,
+		sourceImage: null,
+		parentId: 'root'
+	});
 	const d = readDraft('n1')!;
 	expect(d.title).toBe('T');
 	expect(d.content).toBe('body');
 	expect(d.tags).toEqual(['a', 'b']);
+	expect(d.sourceUrl).toBe('https://example.com/');
+	expect(d.sourceTitle).toBe('Example');
+	expect(d.parentId).toBe('root');
 	expect(Number.isNaN(new Date(d.at).getTime())).toBe(false);
 });
 

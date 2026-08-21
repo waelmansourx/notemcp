@@ -10,10 +10,11 @@
 		source_description: page.url.searchParams.get('source_description') || null,
 		source_image: page.url.searchParams.get('source_image') || null
 	});
+	let handoffKey = $derived(page.url.searchParams.get('handoff'));
 </script>
 
 <svelte:head>
 	<title>New note · NoteMCP</title>
 </svelte:head>
 
-<NoteEditor {prefill} />
+<NoteEditor {prefill} {handoffKey} />

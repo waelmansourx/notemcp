@@ -8,9 +8,14 @@
 	import { normalizeTagName } from '$lib/tags';
 	import { continuation, detach, touch, restore } from '$lib/composer.svelte';
 	import { saveDraft, readDraft, clearDraft } from '$lib/draft.svelte';
+	import { saveEditorHandoff } from '$lib/editor-handoff';
+	import { pastedLinkMarkdown, standaloneHttpUrl } from '$lib/links';
 	import { suggestions } from '$lib/cache.svelte';
-	import { beginMediaUpload, compressImage, type PendingMedia } from '$lib/media';
+	import { ImageAttachments, imageFilesFrom } from '$lib/composer/image-attachments.svelte';
+	import { LinkPreview, type LinkPreviewSnapshot } from '$lib/composer/link-preview.svelte';
 	import TagPicker from './TagPicker.svelte';
+	import AttachmentTray from './AttachmentTray.svelte';
+	import LinkPreviewCard from './LinkPreviewCard.svelte';
 	import { onMount } from 'svelte';
 	import { fly, fade, scale } from 'svelte/transition';
 	import { quintOut } from 'svelte/easing';
@@ -58,27 +63,11 @@
 	let interim = $state('');
 	let voiceError = $state('');
 
-	// Attach uploads straight to R2 (see ADR-001) so the note body carries tiny
-	// references instead of base64. Previews stay local, and each source image
-	// is resized/compressed before its upload starts.
-	type PhotoAttachment = {
-		key: string;
-		dataUrl: string;
-		mediaId: string | null;
-		uploadStart: Promise<PendingMedia> | null;
-		uploadError: boolean;
-		processing: boolean;
-	};
 	let photoInput = $state<HTMLInputElement | null>(null);
-	let photos = $state<PhotoAttachment[]>([]);
-	let photoError = $state<string | null>(null);
-	let photoDragging = $state(false);
-	const MAX_PHOTO_BYTES = 4 * 1024 * 1024;
-	const MAX_SOURCE_PHOTO_BYTES = 25 * 1024 * 1024;
-	const MAX_PHOTOS = 10;
-	const photoPreparations = new Set<Promise<void>>();
+	const photos = new ImageAttachments({ onPrepared: () => textarea?.focus() });
+	const link = new LinkPreview();
 
-	let hasContent = $derived(text.trim().length > 0 || photos.length > 0);
+	let hasContent = $derived(text.trim().length > 0 || photos.items.length > 0);
 
 	/* ---------------- continuing an earlier thought ----------------
 
@@ -129,13 +118,28 @@
 		if (!draft) return;
 		if (draft.content) text = draft.content;
 		if (Array.isArray(draft.tags) && draft.tags.length > 0) selected = draft.tags;
+		link.restore({
+			url: draft.sourceUrl ?? null,
+			title: draft.sourceTitle ?? null,
+			description: draft.sourceDescription ?? null,
+			image: draft.sourceImage ?? null
+		});
 	});
 
 	$effect(() => {
 		const content = text;
 		const tags = selected;
 		if (!content.trim() && tags.length === 0) clearDraft(DRAFT_ID);
-		else saveDraft(DRAFT_ID, { title: '', content, tags });
+		else
+			saveDraft(DRAFT_ID, {
+				title: '',
+				content,
+				tags,
+				sourceUrl: link.url,
+				sourceTitle: link.title,
+				sourceDescription: link.description,
+				sourceImage: link.image
+			});
 	});
 
 	// Tapping "+" on a thread both attaches it and opens the sheet — including
@@ -161,6 +165,7 @@
 		if (!hasContent) {
 			selected = defaultTags();
 			clearPhoto();
+			link.clear();
 		}
 		voiceError = '';
 		// The dock is already there, so on desktop "opening the composer" only
@@ -177,16 +182,17 @@
 		interim = '';
 	}
 
-	/** Every exit keeps the text. Discarding is an explicit, separate action. */
+	/** Closing is not publishing. The draft effect above has already kept the
+	 *  text on this device; only the explicit Keep action creates a note. */
 	function dismiss() {
-		if (hasContent) save();
-		else closeSheet();
+		closeSheet();
 	}
 
 	type DiscardSnapshot = {
 		text: string;
-		photos: PhotoAttachment[];
+		photos: typeof photos.items;
 		selected: string[];
+		link: LinkPreviewSnapshot;
 	};
 	let pendingDiscard = $state<DiscardSnapshot | null>(null);
 	let discardTimer: ReturnType<typeof setTimeout> | null = null;
@@ -200,7 +206,12 @@
 		}
 
 		if (discardTimer) clearTimeout(discardTimer);
-		pendingDiscard = { text, photos: [...photos], selected };
+		pendingDiscard = {
+			text,
+			photos: [...photos.items],
+			selected,
+			link: link.snapshot()
+		};
 		discardTimer = setTimeout(() => {
 			pendingDiscard = null;
 			discardTimer = null;
@@ -208,6 +219,7 @@
 
 		text = '';
 		clearPhoto();
+		link.clear();
 		clearDraft(DRAFT_ID);
 		closeSheet();
 	}
@@ -218,8 +230,9 @@
 		discardTimer = null;
 
 		text = pendingDiscard.text;
-		photos = pendingDiscard.photos;
+		photos.items = pendingDiscard.photos;
 		selected = pendingDiscard.selected;
+		link.restore(pendingDiscard.link);
 		pendingDiscard = null;
 
 		if (!desktop) open = true;
@@ -234,129 +247,59 @@
 		const input = event.currentTarget as HTMLInputElement;
 		const files = Array.from(input.files ?? []);
 		input.value = '';
-		attachPhotos(files);
-	}
-
-	function dataUrlFor(blob: Blob): Promise<string> {
-		return new Promise((resolve, reject) => {
-			const reader = new FileReader();
-			reader.onload = () => resolve(reader.result as string);
-			reader.onerror = () => reject(reader.error);
-			reader.readAsDataURL(blob);
-		});
-	}
-
-	function imageFilesFrom(data: DataTransfer | null): File[] {
-		if (!data) return [];
-		const files = Array.from(data.files).filter((file) => file.type.startsWith('image/'));
-		if (files.length > 0) return files;
-		return Array.from(data.items)
-			.filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
-			.map((item) => item.getAsFile())
-			.filter((file): file is File => file !== null);
-	}
-
-	function attachPhotos(files: File[]) {
-		const images = files.filter((file) => file.type.startsWith('image/'));
-		if (images.length === 0) return;
-		photoError = null;
-
-		const remaining = MAX_PHOTOS - photos.length;
-		if (remaining <= 0) {
-			photoError = `You can attach up to ${MAX_PHOTOS} images.`;
-			return;
-		}
-		if (images.length > remaining) photoError = `You can attach up to ${MAX_PHOTOS} images.`;
-
-		for (const file of images.slice(0, remaining)) {
-			if (file.size > MAX_SOURCE_PHOTO_BYTES) {
-				photoError = 'One of those images is too large to process (25MB max).';
-				continue;
-			}
-			const photo = $state<PhotoAttachment>({
-				key: crypto.randomUUID(),
-				dataUrl: '',
-				mediaId: null,
-				uploadStart: null,
-				uploadError: false,
-				processing: true
-			});
-			photos.push(photo);
-
-			const preparation = (async () => {
-				try {
-					const { blob } = await compressImage(file, { maxBytes: MAX_PHOTO_BYTES });
-					if (blob.size > MAX_PHOTO_BYTES) {
-						photo.uploadError = true;
-						photoError = 'One image is still over 4MB after compression.';
-						return;
-					}
-					photo.dataUrl = await dataUrlFor(blob);
-					const started = beginMediaUpload(blob, 'image');
-					photo.uploadStart = started;
-					started
-						.then(({ id, whenUploaded }) => {
-							photo.mediaId = id;
-							whenUploaded.catch(() => {
-								photo.mediaId = null;
-								photo.uploadError = true;
-							});
-						})
-						.catch(() => (photo.uploadError = true));
-				} catch {
-					photo.uploadError = true;
-				} finally {
-					photo.processing = false;
-					textarea?.focus();
-				}
-			})();
-			photoPreparations.add(preparation);
-			preparation.finally(() => photoPreparations.delete(preparation));
-		}
+		photos.attach(files);
 	}
 
 	function onPhotoPaste(event: ClipboardEvent) {
 		const files = imageFilesFrom(event.clipboardData);
-		if (files.length === 0) return;
+		if (files.length > 0) {
+			event.preventDefault();
+			photos.attach(files);
+			return;
+		}
+
+		const url = standaloneHttpUrl(event.clipboardData?.getData('text/plain') ?? '');
+		if (!url) return;
 		event.preventDefault();
-		attachPhotos(files);
+		const el = event.currentTarget as HTMLTextAreaElement;
+		const start = el.selectionStart ?? text.length;
+		const end = el.selectionEnd ?? start;
+		const markdown = pastedLinkMarkdown(url, text.slice(start, end));
+		text = text.slice(0, start) + markdown + text.slice(end);
+		queueMicrotask(() => {
+			textarea?.focus();
+			textarea?.setSelectionRange(start + markdown.length, start + markdown.length);
+		});
+		link.fetch(url);
 	}
 
 	function onPhotoDragOver(event: DragEvent) {
 		if (!Array.from(event.dataTransfer?.types ?? []).includes('Files')) return;
 		event.preventDefault();
 		if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
-		photoDragging = true;
+		photos.dragging = true;
 	}
 
 	function onPhotoDragLeave(event: DragEvent) {
 		const current = event.currentTarget as HTMLElement;
 		if (event.relatedTarget instanceof Node && current.contains(event.relatedTarget)) return;
-		photoDragging = false;
+		photos.dragging = false;
 	}
 
 	function onPhotoDrop(event: DragEvent) {
 		event.preventDefault();
-		photoDragging = false;
-		attachPhotos(imageFilesFrom(event.dataTransfer));
+		photos.dragging = false;
+		photos.attach(imageFilesFrom(event.dataTransfer));
 	}
 
 	function clearPhoto() {
-		photos = [];
-		photoError = null;
-		photoDragging = false;
-	}
-
-	function removePhoto(key: string) {
-		photos = photos.filter((photo) => photo.key !== key);
-		if (photos.every((photo) => !photo.uploadError)) photoError = null;
+		photos.clear();
 	}
 
 	function buildContent(): string {
 		const parts: string[] = [];
-		for (const photo of photos) {
-			if (photo.mediaId) parts.push(`![](/api/media/${photo.mediaId})`);
-		}
+		const images = photos.markdown();
+		if (images) parts.push(images);
 		const t = text.trim();
 		if (t) parts.push(t);
 		return parts.join('\n\n');
@@ -367,12 +310,7 @@
 		// signing round trip, not the upload — but if Save is tapped in that
 		// narrow window, wait for it rather than either blocking on the full
 		// upload or silently dropping the photo.
-		await Promise.allSettled([...photoPreparations]);
-		await Promise.allSettled(
-			photos
-				.filter((photo) => !photo.mediaId && !photo.uploadError)
-				.map((photo) => photo.uploadStart)
-		);
+		await photos.waitForIds();
 
 		const content = buildContent();
 		if (!content) return;
@@ -380,11 +318,11 @@
 		const entry = queueNote({
 			title: '',
 			content_markdown: content,
-			source_url: null,
-			source_type: null,
-			source_title: null,
-			source_description: null,
-			source_image: null,
+			source_url: link.url,
+			source_type: link.url ? 'share' : null,
+			source_title: link.title,
+			source_description: link.description,
+			source_image: link.image,
 			parent_id: continuation.target?.id ?? null,
 			tagNames: selected.map(normalizeTagName).filter(Boolean)
 		});
@@ -400,6 +338,7 @@
 
 		text = '';
 		clearPhoto();
+		link.clear();
 		clearDraft(DRAFT_ID);
 		closeSheet();
 
@@ -422,6 +361,33 @@
 			},
 			() => showToast('Saved on this device — will sync', { duration: 2600 })
 		);
+	}
+
+	async function openFullEditor() {
+		await photos.waitForIds();
+
+		const content = buildContent();
+		if (!content && photos.items.length > 0) {
+			photos.error = "Couldn't prepare those images for the editor — remove them or try again.";
+			return;
+		}
+
+		const handoff = saveEditorHandoff({
+			content,
+			tags: selected.map(normalizeTagName).filter(Boolean),
+			parentId: continuation.target?.id ?? null,
+			sourceUrl: link.url,
+			sourceTitle: link.title,
+			sourceDescription: link.description,
+			sourceImage: link.image
+		});
+		if (!handoff) {
+			showToast("Couldn't open the full editor — your draft is still here", { duration: 3000 });
+			return;
+		}
+
+		await goto(`/note/new?handoff=${encodeURIComponent(handoff)}`);
+		clearDraft(DRAFT_ID);
 	}
 
 	/* ---------------- voice ---------------- */
@@ -765,50 +731,8 @@
 		<TagPicker bind:selected recent={recentTags} onpick={() => textarea?.focus()} />
 	</div>
 
-	{#if photos.length > 0}
-		<div class="mb-3 flex shrink-0 gap-2 overflow-x-auto pt-1 pr-1">
-			{#each photos as photo (photo.key)}
-				<div class="relative shrink-0">
-					{#if photo.dataUrl}
-						<img
-							src={photo.dataUrl}
-							alt=""
-							class="h-20 w-20 rounded-[var(--radius-lg)] object-cover"
-							class:opacity-50={photo.processing || photo.uploadError}
-							style="background: var(--color-surface-2);"
-						/>
-					{:else}
-						<div
-							class="h-20 w-20 animate-pulse rounded-[var(--radius-lg)]"
-							style="background: var(--color-surface-2);"
-						></div>
-					{/if}
-					{#if photo.processing}
-						<span
-							class="absolute inset-0 grid place-items-center text-[0.65rem] font-bold"
-							style="color: var(--color-ink-muted);"
-						>
-							Compressing
-						</span>
-					{/if}
-					<button
-						type="button"
-						aria-label="Remove image"
-						class="absolute -top-1.5 -right-1.5 grid h-5 w-5 place-items-center rounded-full text-[10px]"
-						style="background: var(--color-ink); color: var(--color-bg);"
-						onclick={() => removePhoto(photo.key)}
-					>
-						✕
-					</button>
-				</div>
-			{/each}
-		</div>
-	{/if}
-	{#if photoError || photos.some((photo) => photo.uploadError)}
-		<p class="mb-2 shrink-0 text-[0.78rem]" style="color: var(--color-danger);">
-			{photoError ?? "Couldn't upload one or more images — remove them or try again."}
-		</p>
-	{/if}
+	<LinkPreviewCard preview={link} mode="composer" class="mb-3 shrink-0" />
+	<AttachmentTray attachments={photos} class="mb-3 shrink-0" />
 
 	<!-- The sheet opens as an explicit "now I'm writing" gesture, so it can
 		     afford to invite four lines right away. The dock is sitting over
@@ -819,9 +743,9 @@
 		     the stream underneath it off the bottom of the window. -->
 	<div
 		class="relative flex min-h-0 w-full"
-		class:ring-2={photoDragging}
-		class:rounded-[var(--radius-lg)]={photoDragging}
-		style={photoDragging ? 'box-shadow: 0 0 0 2px var(--color-accent);' : undefined}
+		class:ring-2={photos.dragging}
+		class:rounded-[var(--radius-lg)]={photos.dragging}
+		style={photos.dragging ? 'box-shadow: 0 0 0 2px var(--color-accent);' : undefined}
 		ondragover={onPhotoDragOver}
 		ondragleave={onPhotoDragLeave}
 		ondrop={onPhotoDrop}
@@ -834,7 +758,7 @@
 			onkeydown={onKeydown}
 			onpaste={onPhotoPaste}
 			rows={desktopMode ? 1 : 4}
-			placeholder={photoDragging ? 'Drop image to attach…' : 'Write something…'}
+			placeholder={photos.dragging ? 'Drop image to attach…' : 'Write something…'}
 			style="outline: none;"
 			class={desktopMode
 				? 'max-h-[38vh] w-full flex-none resize-none overflow-y-auto bg-transparent font-serif text-[1.18rem] leading-[1.5] tracking-[-0.017em] outline-none'
@@ -897,28 +821,26 @@
 			>
 		</button>
 
-		<!-- Nothing to expand into when the composer is already a
-			     full-height column. -->
-		{#if !desktopMode}
-			<button
-				type="button"
-				aria-label="Full screen"
-				disabled
-				class="grid h-9 w-9 shrink-0 cursor-default place-items-center rounded-full opacity-35"
-				style="background: var(--color-surface-2); color: var(--color-ink-2);"
+		<!-- Promote this exact draft — text, tags, images and thread target —
+			     into the full editor without publishing it first. -->
+		<button
+			type="button"
+			aria-label="Full editor"
+			class="grid h-9 w-9 shrink-0 place-items-center rounded-full active:scale-95"
+			style="background: var(--color-surface-2); color: var(--color-ink-2);"
+			onclick={openFullEditor}
+		>
+			<svg
+				width="16"
+				height="16"
+				viewBox="0 0 24 24"
+				fill="none"
+				stroke="currentColor"
+				stroke-width="1.9"
+				stroke-linecap="round"
+				stroke-linejoin="round"><path d="M14 4h6v6M20 4l-7 7M10 20H4v-6M4 20l7-7" /></svg
 			>
-				<svg
-					width="16"
-					height="16"
-					viewBox="0 0 24 24"
-					fill="none"
-					stroke="currentColor"
-					stroke-width="1.9"
-					stroke-linecap="round"
-					stroke-linejoin="round"><path d="M14 4h6v6M20 4l-7 7M10 20H4v-6M4 20l7-7" /></svg
-				>
-			</button>
-		{/if}
+		</button>
 
 		{#if hasContent}
 			<button

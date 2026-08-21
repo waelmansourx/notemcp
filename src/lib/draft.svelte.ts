@@ -17,6 +17,11 @@ export interface Draft {
 	title: string;
 	content: string;
 	tags: string[];
+	sourceUrl?: string | null;
+	sourceTitle?: string | null;
+	sourceDescription?: string | null;
+	sourceImage?: string | null;
+	parentId?: string | null;
 	at: string;
 }
 

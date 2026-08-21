@@ -18,7 +18,14 @@ import {
 } from '@codemirror/state';
 import { Language, defineLanguageFacet, languageDataProp, syntaxTree } from '@codemirror/language';
 import { parser as commonmarkParser, TaskList, Strikethrough, Autolink } from '@lezer/markdown';
-import { history, historyKeymap, defaultKeymap } from '@codemirror/commands';
+import { pastedLinkEdit, standaloneHttpUrl } from '$lib/links';
+import {
+	history,
+	historyKeymap,
+	defaultKeymap,
+	undo as historyUndo,
+	redo as historyRedo
+} from '@codemirror/commands';
 
 // A Bear-style "live" markdown editor: there is no preview mode, because the
 // text you type is already styled in place. Syntax markers (#, **, `) stay
@@ -391,7 +398,7 @@ function classifyMarker(marker: string): string {
 // Applies a block marker across every line the selection touches, swapping
 // out whatever marker was there. Tapping the same button again clears it, so
 // each button is a toggle rather than a one-way conversion.
-function toggleBlock(kind: 'task' | 'bullet' | 'heading'): StateCommand {
+function toggleBlock(kind: 'task' | 'bullet' | 'ordered' | 'heading'): StateCommand {
 	return ({ state, dispatch }) => {
 		const changes: ChangeSpec[] = [];
 		const { from, to } = state.selection.main;
@@ -409,6 +416,8 @@ function toggleBlock(kind: 'task' | 'bullet' | 'heading'): StateCommand {
 				next = current === 'h1' ? '## ' : current === 'h2' ? '' : '# ';
 			} else if (kind === 'task') {
 				next = current === 'task' ? '' : '- [ ] ';
+			} else if (kind === 'ordered') {
+				next = current === 'ordered' ? '' : '1. ';
 			} else {
 				next = current === 'bullet' ? '' : '- ';
 			}
@@ -469,6 +478,39 @@ const toggleBold: StateCommand = ({ state, dispatch }) => {
 	return true;
 };
 
+function toggleInline(marker: string): StateCommand {
+	return ({ state, dispatch }) => {
+		dispatch(
+			state.update(
+				state.changeByRange((range) => {
+					const size = marker.length;
+					const wrapped =
+						state.sliceDoc(Math.max(0, range.from - size), range.from) === marker &&
+						state.sliceDoc(range.to, range.to + size) === marker;
+
+					if (wrapped) {
+						return {
+							changes: [
+								{ from: range.from - size, to: range.from },
+								{ from: range.to, to: range.to + size }
+							],
+							range: EditorSelection.range(range.from - size, range.to - size)
+						};
+					}
+
+					const text = state.sliceDoc(range.from, range.to);
+					return {
+						changes: { from: range.from, to: range.to, insert: `${marker}${text}${marker}` },
+						range: EditorSelection.range(range.from + size, range.to + size)
+					};
+				}),
+				{ scrollIntoView: true }
+			)
+		);
+		return true;
+	};
+}
+
 // `[text](|)` when something is selected, `[|]()` when nothing is — either
 // way the caret lands where the next thing to type goes.
 const insertLink: StateCommand = ({ state, dispatch }) => {
@@ -492,9 +534,14 @@ const insertLink: StateCommand = ({ state, dispatch }) => {
 export const formatCommands = {
 	task: toggleBlock('task'),
 	bullet: toggleBlock('bullet'),
+	ordered: toggleBlock('ordered'),
 	heading: toggleBlock('heading'),
 	bold: toggleBold,
-	link: insertLink
+	italic: toggleInline('*'),
+	code: toggleInline('`'),
+	link: insertLink,
+	undo: historyUndo,
+	redo: historyRedo
 } satisfies Record<string, StateCommand>;
 
 export type FormatAction = keyof typeof formatCommands;
@@ -646,6 +693,8 @@ export function createMarkdownEditor(options: {
 	placeholder?: string;
 	onChange: (value: string) => void;
 	onFocusChange?: (focused: boolean) => void;
+	onLinkPaste?: (url: string) => void;
+	onImages?: (files: File[]) => void;
 }): EditorView {
 	const view = new EditorView({
 		parent: options.parent,
@@ -665,6 +714,37 @@ export function createMarkdownEditor(options: {
 				theme,
 				placeholderExt(options.placeholder ?? ''),
 				EditorView.domEventHandlers({
+					paste(event, view) {
+						const images = Array.from(event.clipboardData?.files ?? []).filter((file) =>
+							file.type.startsWith('image/')
+						);
+						if (images.length > 0 && options.onImages) {
+							event.preventDefault();
+							options.onImages(images);
+							return true;
+						}
+						const url = standaloneHttpUrl(event.clipboardData?.getData('text/plain') ?? '');
+						if (!url) return false;
+						event.preventDefault();
+						const range = view.state.selection.main;
+						const edit = pastedLinkEdit(view.state.doc.toString(), range.from, range.to, url);
+						view.dispatch({
+							changes: edit,
+							selection: { anchor: edit.from + edit.insert.length },
+							scrollIntoView: true
+						});
+						options.onLinkPaste?.(url);
+						return true;
+					},
+					drop(event) {
+						const images = Array.from(event.dataTransfer?.files ?? []).filter((file) =>
+							file.type.startsWith('image/')
+						);
+						if (images.length === 0 || !options.onImages) return false;
+						event.preventDefault();
+						options.onImages(images);
+						return true;
+					},
 					click(event, view) {
 						const target = event.target as HTMLElement;
 						if (!target.classList?.contains('cm-md-task-checkbox')) return false;

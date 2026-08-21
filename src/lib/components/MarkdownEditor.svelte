@@ -6,8 +6,16 @@
 	let {
 		value = $bindable(''),
 		placeholder = 'Write something…',
-		focused = $bindable(false)
-	}: { value?: string; placeholder?: string; focused?: boolean } = $props();
+		focused = $bindable(false),
+		onlinkpaste,
+		onimages
+	}: {
+		value?: string;
+		placeholder?: string;
+		focused?: boolean;
+		onlinkpaste?: (url: string) => void;
+		onimages?: (files: File[]) => void;
+	} = $props();
 
 	let host: HTMLDivElement;
 	let view = $state<EditorView | null>(null);
@@ -36,7 +44,9 @@
 				doc: value,
 				placeholder,
 				onChange: (next) => (value = next),
-				onFocusChange: (next) => (focused = next)
+				onFocusChange: (next) => (focused = next),
+				onLinkPaste: onlinkpaste,
+				onImages: onimages
 			});
 			view = instance;
 			commands = module.formatCommands;
@@ -78,6 +88,24 @@
 		view.dispatch({ selection: { anchor: view.state.doc.length } });
 	}
 
+	export function insertBlock(markdown: string) {
+		if (!view || !markdown) return;
+		const range = view.state.selection.main;
+		const before =
+			range.from > 0 && view.state.sliceDoc(range.from - 1, range.from) !== '\n' ? '\n\n' : '';
+		const after =
+			range.to < view.state.doc.length && view.state.sliceDoc(range.to, range.to + 1) !== '\n'
+				? '\n\n'
+				: '';
+		const insert = before + markdown + after;
+		view.dispatch({
+			changes: { from: range.from, to: range.to, insert },
+			selection: { anchor: range.from + before.length + markdown.length },
+			scrollIntoView: true
+		});
+		view.focus();
+	}
+
 	// Reconcile edits made to `value` from outside the editor. Guarded on an
 	// actual difference so the editor's own changes don't loop back into it,
 	// and skipped entirely while the editor has focus — external writes only
@@ -112,13 +140,7 @@
 	});
 </script>
 
-<div
-	class="editor-shell"
-	onclick={(e) => {
-		if (!view) return;
-		focusEditor({ x: e.clientX, y: e.clientY });
-	}}
->
+<div class="editor-shell">
 	<div bind:this={host} class="cm-host" class:hidden={!view}></div>
 
 	{#if !view}
