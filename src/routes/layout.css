@@ -133,6 +133,66 @@ div[style*='box-shadow: 0 10px 26px rgba(20,80,58,.26)'] {
 	box-shadow: 0 12px 26px rgba(100, 3, 50, 0.28) !important;
 }
 
+.navigation-progress {
+	position: fixed;
+	inset: 0 0 auto 0;
+	z-index: 1000;
+	height: 3px;
+	pointer-events: none;
+	background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+}
+
+.navigation-progress__bar {
+	width: 100%;
+	height: 100%;
+	transform-origin: left center;
+	background: var(--color-accent);
+	box-shadow: 0 0 10px color-mix(in srgb, var(--color-accent) 32%, transparent);
+	transition: transform 140ms linear;
+}
+
+.navigation-interstitial {
+	position: fixed;
+	inset: 0;
+	z-index: 900;
+	display: grid;
+	place-items: center;
+	pointer-events: none;
+	background: color-mix(in srgb, var(--color-bg) 88%, transparent);
+	backdrop-filter: blur(2px);
+	-webkit-backdrop-filter: blur(2px);
+}
+
+.navigation-interstitial__content {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.62rem;
+	padding: 0.68rem 0.9rem;
+	border: 1px solid var(--color-border);
+	border-radius: 999px;
+	background: color-mix(in srgb, var(--color-surface) 94%, transparent);
+	box-shadow: 0 10px 28px color-mix(in srgb, var(--color-accent) 10%, transparent);
+	color: var(--color-ink-muted);
+	font-size: 0.78rem;
+	font-weight: 600;
+	letter-spacing: -0.01em;
+}
+
+.navigation-interstitial__spinner {
+	width: 0.8rem;
+	height: 0.8rem;
+	border: 1.5px solid color-mix(in srgb, var(--color-accent) 22%, transparent);
+	border-top-color: var(--color-accent);
+	border-radius: 999px;
+	animation: navigation-spin 650ms linear infinite;
+}
+
+@keyframes navigation-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+
 @media (hover: hover) and (pointer: fine) {
 	a[href],
 	button:not(:disabled),
@@ -160,5 +220,13 @@ textarea:focus-visible {
 	::view-transition-old(*),
 	::view-transition-new(*) {
 		animation: none !important;
+	}
+
+	.navigation-progress__bar {
+		transition: none;
+	}
+
+	.navigation-interstitial__spinner {
+		animation: none;
 	}
 }
