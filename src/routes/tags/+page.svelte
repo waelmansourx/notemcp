@@ -7,6 +7,10 @@
 	let { data }: { data: PageData } = $props();
 
 	let tagCount = $derived(data.nodes.length);
+
+	function indent(depth: number): string {
+		return `margin-left: ${Math.min(depth, 3) * 14}px;`;
+	}
 </script>
 
 <svelte:head><title>Tags · NoteMCP</title></svelte:head>
@@ -26,19 +30,20 @@
 		{/if}
 
 		{#each data.nodes as node (node.id)}
-			<TagGroup
-				tag={{ id: node.id, name: node.name }}
-				count={node.count}
-				notes={node.notes}
-				label={node.depth > 0 ? node.leaf : undefined}
-				depth={node.depth}
-			/>
+			<div style={indent(node.depth)}>
+				<TagGroup
+					tag={{ id: node.id, name: node.name }}
+					count={node.count}
+					notes={node.notes}
+					label={node.depth > 0 ? node.leaf : undefined}
+				/>
+			</div>
 		{/each}
 
 		{#if data.nodes.length > 0}
 			<p class="pt-4 text-[0.82rem] leading-relaxed" style="color: var(--color-ink-muted);">
-				Tags help related thoughts find each other. A nested tag reads as a branch beneath its
-				parent, while the parent still collects everything filed below it.
+				Tags help related thoughts find each other. Tap one to open that tag, and use See all when
+				you want the full list instead of browsing the shelf.
 			</p>
 		{/if}
 	</main>
