@@ -41,9 +41,18 @@ const PER_TAG = 9;
  * literal text and took the page down with them. It now asks for computed
  * preview fields: `preview` for text and `preview_image` for the first stable
  * thumbnail, so the note body never has to leave Postgres just to draw a shelf.
+ *
+ * Deploys are not atomic with database migrations, though. If the app reaches
+ * a database whose PostgREST schema does not know `preview_image` yet, selecting
+ * it makes the *entire notes query* fail. The legacy select below is therefore
+ * an intentional compatibility path: tags stay visible immediately, with
+ * source/YouTube thumbnails, and embedded-image thumbnails appear as soon as
+ * the migration is available.
  */
 const PREVIEW_SELECT =
 	'id, title, source_title, source_image, source_url, preview_image, updated_at, thread_count, preview, note_tags(tags(id, name))';
+const LEGACY_PREVIEW_SELECT =
+	'id, title, source_title, source_image, source_url, updated_at, thread_count, preview, note_tags(tags(id, name))';
 
 function label(row: any): string {
 	const raw = (row.source_title || row.title || row.preview || '').replace(/\s+/g, ' ').trim();
@@ -81,18 +90,23 @@ export const load: PageServerLoad = async ({ locals: { supabase, user } }) => {
 	const noteIds = [...new Set((links ?? []).map((l: any) => l.note_id))];
 	if (noteIds.length === 0) return { nodes: [] as TagTreeGroup[] };
 
-	const { data: noteRows } = await supabase
-		.from('notes')
-		.select(PREVIEW_SELECT)
-		.eq('user_id', user!.id)
-		.is('deleted_at', null)
-		.eq('archived', false)
-		.in('id', noteIds)
-		.order('updated_at', { ascending: false });
+	const queryNotes = (select: string) =>
+		supabase
+			.from('notes')
+			.select(select)
+			.eq('user_id', user!.id)
+			.is('deleted_at', null)
+			.eq('archived', false)
+			.in('id', noteIds)
+			.order('updated_at', { ascending: false });
+
+	let noteResult = await queryNotes(PREVIEW_SELECT);
+	if (noteResult.error) noteResult = await queryNotes(LEGACY_PREVIEW_SELECT);
+	const noteRows = noteResult.data ?? [];
 
 	const stubs = new Map<string, ThreadStub>();
 	const rank = new Map<string, number>();
-	(noteRows ?? []).forEach((row: any, i) => {
+	noteRows.forEach((row: any, i) => {
 		stubs.set(row.id, {
 			id: row.id,
 			label: label(row),
