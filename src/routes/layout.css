@@ -120,6 +120,19 @@ textarea {
 	display: none;
 }
 
+/* Keep the floating composer on its own compositor layer so horizontal shelf
+   gestures and vertical scrolling do not make it visually drift. The bar sits
+   a little closer to the bottom edge than before, and its shadow belongs to
+   the same plum family as the bar rather than the old green theme. */
+div[style*='padding-bottom: calc(1.75rem + env(safe-area-inset-bottom))'] {
+	padding-bottom: calc(1rem + env(safe-area-inset-bottom)) !important;
+	transform: translateZ(0);
+	will-change: transform;
+}
+div[style*='box-shadow: 0 10px 26px rgba(20,80,58,.26)'] {
+	box-shadow: 0 12px 26px rgba(100, 3, 50, 0.28) !important;
+}
+
 @media (hover: hover) and (pointer: fine) {
 	a[href],
 	button:not(:disabled),
