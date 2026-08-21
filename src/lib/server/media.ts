@@ -23,7 +23,10 @@ export type MediaKind = 'image' | 'audio';
 /** Extension for a mime type if it's one we accept for the given kind, else null. */
 export function extensionFor(kind: MediaKind, mimeType: string): string | null {
 	const table = kind === 'image' ? IMAGE_TYPES : AUDIO_TYPES;
-	return table[mimeType] ?? null;
+	// MediaRecorder commonly reports `audio/webm;codecs=opus`. The codec is
+	// still signed as part of Content-Type, but the storage extension follows
+	// the underlying MIME type.
+	return table[mimeType.split(';', 1)[0].trim().toLowerCase()] ?? null;
 }
 
 export function maxBytesFor(kind: MediaKind): number {

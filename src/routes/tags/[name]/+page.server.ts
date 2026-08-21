@@ -2,16 +2,12 @@ import type { PageServerLoad } from './$types';
 import type { Note, Tag } from '$lib/types';
 import { attachChildren } from '$lib/thread';
 import { normalizeTagName, tagCovers } from '$lib/tags';
-
-const NOTE_SELECT = '*, note_tags(tags(id, name))';
+import { NOTE_SELECT, normalizeNote } from '$lib/server/notes';
 
 export const load: PageServerLoad = async ({ params, locals: { supabase, user } }) => {
 	const name = normalizeTagName(params.name);
 
-	const { data: tagRows } = await supabase
-		.from('tags')
-		.select('id, name')
-		.eq('user_id', user!.id);
+	const { data: tagRows } = await supabase.from('tags').select('id, name').eq('user_id', user!.id);
 
 	const matching = ((tagRows ?? []) as Tag[]).filter((tag) => tagCovers(name, tag.name));
 	if (matching.length === 0) return { name, notes: [] as Note[] };
@@ -36,10 +32,7 @@ export const load: PageServerLoad = async ({ params, locals: { supabase, user } 
 		.in('id', noteIds)
 		.order('updated_at', { ascending: false });
 
-	const notes: Note[] = (rows ?? []).map((row: any) => {
-		const { note_tags, ...rest } = row;
-		return { ...rest, tags: (note_tags ?? []).map((nt: any) => nt.tags).filter(Boolean) };
-	});
+	const notes: Note[] = (rows ?? []).map(normalizeNote);
 
 	return { name, notes: attachChildren(notes) };
 };

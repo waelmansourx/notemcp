@@ -5,6 +5,7 @@
 // retried the next time the app opens.
 
 import { clearDraft } from './draft.svelte';
+import type { VoiceNote } from './types';
 
 const KEY = 'notemcp:outbox';
 
@@ -25,6 +26,11 @@ export interface OutboxEntry {
 	/** Set when this thought was written into an existing thread. */
 	parent_id: string | null;
 	tagNames: string[];
+	voice?:
+		| (Pick<VoiceNote, 'media_id' | 'duration_ms' | 'waveform'> & {
+				local_url?: string | null;
+		  })
+		| null;
 	queued_at: string;
 }
 
@@ -79,7 +85,14 @@ async function send(entry: OutboxEntry): Promise<{ id: string } | null> {
 		source_description: entry.source_description,
 		source_image: entry.source_image,
 		parent_id: entry.parent_id,
-		tagNames: entry.tagNames
+		tagNames: entry.tagNames,
+		voice: entry.voice
+			? {
+					media_id: entry.voice.media_id,
+					duration_ms: entry.voice.duration_ms,
+					waveform: entry.voice.waveform
+				}
+			: null
 	});
 
 	try {

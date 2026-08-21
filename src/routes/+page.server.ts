@@ -4,8 +4,7 @@ import type { TagCount } from '$lib/cache';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { attachChildren } from '$lib/thread';
 import { tagAncestors } from '$lib/tags';
-
-const NOTE_SELECT = '*, note_tags(tags(id, name))';
+import { NOTE_SELECT, normalizeNote } from '$lib/server/notes';
 
 export type { TagCount };
 
@@ -32,10 +31,7 @@ async function loadStream(supabase: SupabaseClient, userId: string): Promise<Str
 		supabase.from('tags').select('id, name').eq('user_id', userId)
 	]);
 
-	const notes: Note[] = (notesResult.data ?? []).map((row: any) => {
-		const { note_tags, ...rest } = row;
-		return { ...rest, tags: (note_tags ?? []).map((nt: any) => nt.tags).filter(Boolean) };
-	});
+	const notes: Note[] = (notesResult.data ?? []).map(normalizeNote);
 
 	/*
 	 * Counts come from the loaded window rather than a second aggregate query:
@@ -92,8 +88,10 @@ export const load: PageServerLoad = async ({ locals: { supabase, user } }) => {
 	 * quietly. First run on a device is the only time you watch it load.
 	 */
 	return {
-		stream: loadStream(supabase, user!.id).catch(
-			(): StreamPayload => ({ notes: [], allTags: [], ok: false })
-		)
+		stream: loadStream(supabase, user!.id).catch((): StreamPayload => ({
+			notes: [],
+			allTags: [],
+			ok: false
+		}))
 	};
 };

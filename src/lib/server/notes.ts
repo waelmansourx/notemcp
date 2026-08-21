@@ -1,13 +1,37 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { Note } from '$lib/types';
+import type { Note, VoiceNote } from '$lib/types';
 
-const NOTE_SELECT = '*, note_tags(tags(id, name))';
+export const NOTE_SELECT =
+	'*, voice_note:voice_notes(media_id, duration_ms, waveform, transcription_status, raw_text, error, language_code), note_tags(tags(id, name))';
 
-function normalize(row: any): Note {
-	const { note_tags, ...rest } = row;
+function voiceOf(value: unknown): VoiceNote | null {
+	const row = Array.isArray(value) ? value[0] : value;
+	if (!row || typeof row !== 'object') return null;
+	const voice = row as Record<string, unknown>;
+	return {
+		media_id: typeof voice.media_id === 'string' ? voice.media_id : null,
+		duration_ms: typeof voice.duration_ms === 'number' ? voice.duration_ms : 0,
+		waveform: Array.isArray(voice.waveform)
+			? voice.waveform.filter((level): level is number => typeof level === 'number')
+			: [],
+		transcription_status:
+			voice.transcription_status === 'processing' ||
+			voice.transcription_status === 'complete' ||
+			voice.transcription_status === 'failed'
+				? voice.transcription_status
+				: 'pending',
+		raw_text: typeof voice.raw_text === 'string' ? voice.raw_text : null,
+		error: typeof voice.error === 'string' ? voice.error : null,
+		language_code: typeof voice.language_code === 'string' ? voice.language_code : null
+	};
+}
+
+export function normalizeNote(row: any): Note {
+	const { note_tags, voice_note, ...rest } = row;
 	return {
 		...rest,
-		tags: (note_tags ?? []).map((nt: any) => nt.tags).filter(Boolean)
+		tags: (note_tags ?? []).map((nt: any) => nt.tags).filter(Boolean),
+		voice_note: voiceOf(voice_note)
 	};
 }
 
@@ -48,7 +72,7 @@ export async function setNoteTags(
 async function withTags(supabase: SupabaseClient, noteId: string): Promise<Note> {
 	const { data } = await supabase.from('notes').select(NOTE_SELECT).eq('id', noteId).single();
 	if (!data) throw new Error('Note vanished immediately after being written');
-	return normalize(data);
+	return normalizeNote(data);
 }
 
 /** Look a note up by the id its client generated, if it's already been stored. */
@@ -63,7 +87,46 @@ async function findByClientId(
 		.eq('user_id', userId)
 		.eq('client_id', clientId)
 		.maybeSingle();
-	return data ? normalize(data) : null;
+	return data ? normalizeNote(data) : null;
+}
+
+export interface VoiceNoteInput {
+	media_id: string;
+	duration_ms: number;
+	waveform: number[];
+}
+
+async function attachVoiceNote(
+	supabase: SupabaseClient,
+	userId: string,
+	noteId: string,
+	noteUpdatedAt: string,
+	voice: VoiceNoteInput
+) {
+	const { data: media, error: mediaError } = await supabase
+		.from('media')
+		.select('id, status')
+		.eq('id', voice.media_id)
+		.eq('user_id', userId)
+		.eq('kind', 'audio')
+		.maybeSingle();
+
+	if (mediaError || !media)
+		throw new Error('Voice recording is missing or is not owned by this user');
+	if (media.status !== 'committed')
+		throw new Error('Voice recording has not finished uploading to R2');
+
+	const { error: insertError } = await supabase.from('voice_notes').insert({
+		note_id: noteId,
+		user_id: userId,
+		media_id: voice.media_id,
+		duration_ms: voice.duration_ms,
+		waveform: voice.waveform,
+		note_updated_at_at_capture: noteUpdatedAt
+	});
+
+	// A local outbox retry legitimately reaches the same note and voice row.
+	if (insertError && insertError.code !== '23505') throw insertError;
 }
 
 /**
@@ -108,6 +171,7 @@ export async function createNote(
 		pinned?: boolean;
 		tagNames?: string[];
 		client_id?: string | null;
+		voice?: VoiceNoteInput | null;
 	}
 ): Promise<Note> {
 	// Capture is queued in localStorage and retried on the next app open, so
@@ -120,7 +184,13 @@ export async function createNote(
 
 	if (clientId) {
 		const existing = await findByClientId(supabase, userId, clientId);
-		if (existing) return existing;
+		if (existing) {
+			if (input.voice && !existing.voice_note) {
+				await attachVoiceNote(supabase, userId, existing.id, existing.updated_at, input.voice);
+				return withTags(supabase, existing.id);
+			}
+			return existing;
+		}
 	}
 
 	const parentId = await resolveParent(supabase, userId, input.parent_id ?? null);
@@ -140,7 +210,7 @@ export async function createNote(
 			source_image: input.source_image ?? null,
 			pinned: input.pinned ?? false
 		})
-		.select('id')
+		.select('id, updated_at')
 		.single();
 
 	if (insertError || !data) {
@@ -155,6 +225,10 @@ export async function createNote(
 
 	if (input.tagNames && input.tagNames.length > 0) {
 		await setNoteTags(supabase, userId, data.id, input.tagNames);
+	}
+
+	if (input.voice) {
+		await attachVoiceNote(supabase, userId, data.id, data.updated_at, input.voice);
 	}
 
 	return withTags(supabase, data.id);

@@ -3,7 +3,15 @@ import { type Handle, redirect } from '@sveltejs/kit';
 import { sequence } from '@sveltejs/kit/hooks';
 import { PUBLIC_SUPABASE_URL, PUBLIC_SUPABASE_ANON_KEY } from '$env/static/public';
 
-const PUBLIC_PATHS = ['/login', '/auth', '/mcp', '/register', '/token', '/.well-known'];
+const PUBLIC_PATHS = [
+	'/login',
+	'/auth',
+	'/mcp',
+	'/register',
+	'/token',
+	'/.well-known',
+	'/api/webhooks/assemblyai'
+];
 
 const supabase: Handle = async ({ event, resolve }) => {
 	event.locals.supabase = createServerClient(PUBLIC_SUPABASE_URL, PUBLIC_SUPABASE_ANON_KEY, {

@@ -15,6 +15,7 @@
 	import Thought from './Thought.svelte';
 	import AttachmentTray from './AttachmentTray.svelte';
 	import LinkPreviewCard from './LinkPreviewCard.svelte';
+	import VoiceNote from './VoiceNote.svelte';
 	import type { Note } from '$lib/types';
 
 	let {
@@ -94,6 +95,7 @@
 
 	let editor = $state<ReturnType<typeof MarkdownEditor> | null>(null);
 	let editorFocused = $state(false);
+	const editedVoiceNotes = new Set<string>();
 	let editorPhotoInput = $state<HTMLInputElement | null>(null);
 	let editorPhotoBusy = $state(false);
 	let editorPhotoError = $state<string | null>(null);
@@ -395,6 +397,34 @@
 					}
 				: n
 		);
+	}
+
+	function markVoiceEdited() {
+		if (id && activeNote?.voice_note) editedVoiceNotes.add(id);
+	}
+
+	/** Adopt a late transcript only while this editor still holds the exact
+	 * empty body it loaded. The database performs the same updated_at guard,
+	 * and this local guard protects keystrokes that have not autosaved yet. */
+	function acceptVoiceTranscript(transcript: string) {
+		if (!id || !activeNote?.voice_note || editorFocused || editedVoiceNotes.has(id)) return;
+		const base = serverState.get(id);
+		if (!base || base.content !== '' || content !== '') return;
+
+		const confirmed = { ...base, content: transcript };
+		content = transcript;
+		saved = confirmed;
+		serverState.set(id, confirmed);
+		commitToThread(id, {
+			title,
+			content: transcript,
+			pinned,
+			tags,
+			sourceUrl,
+			sourceTitle: linkTitle,
+			sourceDescription: linkDescription,
+			sourceImage: linkImage
+		});
 	}
 
 	/*
@@ -1178,12 +1208,22 @@
 
 		<LinkPreviewCard preview={link} onremove={removeLinkPreview} class="mb-4" />
 
+		{#if activeNote?.voice_note}
+			<VoiceNote
+				noteId={activeNote.id}
+				voice={activeNote.voice_note}
+				class="mb-4"
+				ontranscript={acceptVoiceTranscript}
+			/>
+		{/if}
+
 		<MarkdownEditor
 			bind:this={editor}
 			bind:value={content}
 			bind:focused={editorFocused}
 			onlinkpaste={handleLinkPaste}
 			onimages={attachEditorPhotos}
+			onchange={markVoiceEdited}
 		/>
 		{#if editorPhotoError}
 			<p class="mt-2 text-xs" style="color: var(--color-danger);">{editorPhotoError}</p>

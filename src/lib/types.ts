@@ -3,6 +3,21 @@ export interface Tag {
 	name: string;
 }
 
+export type TranscriptionStatus = 'pending' | 'processing' | 'complete' | 'failed';
+
+export interface VoiceNote {
+	/** Null only while a freshly recorded blob is still being copied to R2. */
+	media_id: string | null;
+	duration_ms: number;
+	waveform: number[];
+	transcription_status: TranscriptionStatus;
+	raw_text: string | null;
+	error: string | null;
+	language_code: string | null;
+	/** Browser-only playback URL for a capture that has not reached R2 yet. */
+	local_url?: string | null;
+}
+
 export interface Note {
 	id: string;
 	user_id: string;
@@ -26,6 +41,8 @@ export interface Note {
 	updated_at: string;
 	deleted_at: string | null;
 	tags: Tag[];
+	/** Present when the thought originated as a durable R2 voice recording. */
+	voice_note?: VoiceNote | null;
 	/** Thoughts appended to this one, oldest first. Only ever set on the note
 	 *  at the head of a thread, and only by the loaders that assemble one. */
 	children?: Note[];

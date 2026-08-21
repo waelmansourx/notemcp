@@ -72,6 +72,31 @@ test('a note queued without a client id still gets one', () => {
 	expect(queued.client_id.length).toBeGreaterThan(0);
 });
 
+test('a voice note keeps its R2 media metadata but never sends its local blob URL', async () => {
+	queueNote(
+		entry({
+			client_id: 'voice-1',
+			source_type: 'voice',
+			voice: {
+				media_id: '11111111-1111-4111-8111-111111111111',
+				duration_ms: 17_250,
+				waveform: [8, 42, 73, 20],
+				local_url: 'blob:http://localhost/private-device-copy'
+			}
+		})
+	);
+	const calls = stubFetch(() => ({ ok: true }));
+
+	await flushOutbox();
+
+	expect(calls).toHaveLength(1);
+	expect(calls[0].body.voice).toEqual({
+		media_id: '11111111-1111-4111-8111-111111111111',
+		duration_ms: 17_250,
+		waveform: [8, 42, 73, 20]
+	});
+});
+
 /* ---------------- edits ---------------- */
 
 test('an edit is queued under its note id', () => {

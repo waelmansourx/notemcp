@@ -1,13 +1,7 @@
 import { error } from '@sveltejs/kit';
 import type { PageServerLoad } from './$types';
 import type { Note } from '$lib/types';
-
-const NOTE_SELECT = '*, note_tags(tags(id, name))';
-
-function hydrate(row: any): Note {
-	const { note_tags, ...rest } = row;
-	return { ...rest, tags: (note_tags ?? []).map((nt: any) => nt.tags).filter(Boolean) };
-}
+import { NOTE_SELECT, normalizeNote } from '$lib/server/notes';
 
 export const load: PageServerLoad = async ({ params, locals: { supabase, user } }) => {
 	const { data, error: fetchError } = await supabase
@@ -20,7 +14,7 @@ export const load: PageServerLoad = async ({ params, locals: { supabase, user } 
 
 	if (fetchError || !data) throw error(404, 'Note not found');
 
-	const note = hydrate(data);
+	const note = normalizeNote(data);
 
 	/*
 	 * The whole thread, not just what hangs off this note.
@@ -45,7 +39,7 @@ export const load: PageServerLoad = async ({ params, locals: { supabase, user } 
 
 	// Read as it was written. Falls back to just this note if the thread query
 	// failed — a page that shows one thought is better than one that 500s.
-	const thread: Note[] = (members ?? []).map(hydrate);
+	const thread: Note[] = (members ?? []).map(normalizeNote);
 
 	return { note, thread: thread.length > 0 ? thread : [note] };
 };

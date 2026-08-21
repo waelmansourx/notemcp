@@ -27,9 +27,9 @@ function bucket(): string {
 	return env.R2_BUCKET;
 }
 
-function objectUrl(key: string): URL {
+function objectUrl(key: string, expiresIn = PRESIGN_TTL_SECONDS): URL {
 	const url = new URL(`https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com/${bucket()}/${key}`);
-	url.searchParams.set('X-Amz-Expires', String(PRESIGN_TTL_SECONDS));
+	url.searchParams.set('X-Amz-Expires', String(expiresIn));
 	return url;
 }
 
@@ -48,8 +48,8 @@ export async function presignPut(key: string, contentType: string): Promise<stri
 	return signed.url;
 }
 
-export async function presignGet(key: string): Promise<string> {
-	const signed = await client().sign(objectUrl(key), {
+export async function presignGet(key: string, expiresIn = PRESIGN_TTL_SECONDS): Promise<string> {
+	const signed = await client().sign(objectUrl(key, expiresIn), {
 		method: 'GET',
 		aws: { signQuery: true }
 	});

@@ -1,13 +1,6 @@
 import { json, error } from '@sveltejs/kit';
-import { setNoteTags } from '$lib/server/notes';
+import { NOTE_SELECT, normalizeNote, setNoteTags } from '$lib/server/notes';
 import type { RequestHandler } from './$types';
-
-const NOTE_SELECT = '*, note_tags(tags(id, name))';
-
-function normalize(row: any) {
-	const { note_tags, ...rest } = row;
-	return { ...rest, tags: (note_tags ?? []).map((nt: any) => nt.tags).filter(Boolean) };
-}
 
 export const PATCH: RequestHandler = async ({ request, params, locals: { supabase, user } }) => {
 	if (!user) throw error(401, 'Not authenticated');
@@ -50,7 +43,7 @@ export const PATCH: RequestHandler = async ({ request, params, locals: { supabas
 
 	if (fetchError || !data) throw error(404, 'Note not found');
 
-	return json(normalize(data));
+	return json(normalizeNote(data));
 };
 
 export const DELETE: RequestHandler = async ({ params, url, locals: { supabase, user } }) => {

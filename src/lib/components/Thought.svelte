@@ -3,6 +3,7 @@
 	import { timeOfDay, hostname } from '$lib/dates';
 	import { excerpt, extractLeadingImage } from '$lib/markdown';
 	import TagChip from './TagChip.svelte';
+	import VoiceNote from './VoiceNote.svelte';
 	import { keepSelection } from '$lib/selection';
 
 	let {
@@ -26,18 +27,24 @@
 
 	function onclick(event: MouseEvent) {
 		keepSelection(event);
-		if (event.defaultPrevented || !onnavigate) return;
+		const target = event.target;
+		if (target instanceof Element && target.closest('button, a, input, audio')) return;
+		if (voice) return;
+		if (event.defaultPrevented) return;
 		if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
 			return;
 		}
-		event.preventDefault();
-		onnavigate(note.id, { x: event.clientX, y: event.clientY });
+		if (onnavigate) {
+			event.preventDefault();
+			onnavigate(note.id, { x: event.clientX, y: event.clientY });
+		}
 	}
 
 	let { image: embedded, rest } = $derived(extractLeadingImage(note.content_markdown));
 	let image = $derived(note.source_image || embedded);
 	let heading = $derived(note.source_title?.trim() || '');
 	let body = $derived(excerpt(rest, max));
+	let voice = $derived(note.voice_note ?? null);
 </script>
 
 <!--
@@ -57,11 +64,11 @@
 	not an editor-only or a list-only affordance.
 -->
 <svelte:element
-	this={href ? 'a' : 'div'}
-	href={href ?? undefined}
-	role={href ? 'link' : onnavigate ? 'button' : undefined}
-	tabindex={onnavigate && !href ? 0 : undefined}
-	onkeydown={onnavigate && !href
+	this={href && !voice ? 'a' : 'div'}
+	href={href && !voice ? href : undefined}
+	role={!voice && href ? 'link' : !voice && onnavigate ? 'button' : undefined}
+	tabindex={!voice && onnavigate && !href ? 0 : undefined}
+	onkeydown={!voice && onnavigate && !href
 		? (e: KeyboardEvent) => {
 				if (e.key === 'Enter' || e.key === ' ') {
 					e.preventDefault();
@@ -69,49 +76,61 @@
 				}
 			}
 		: undefined}
-	onclick={onclick}
-	class="block rounded-[var(--radius-lg)] p-4 {href || onnavigate ? 'active:opacity-65 cursor-pointer' : ''}"
-	style="background: var(--color-surface); {href
-		? `view-transition-name: note-${note.id};`
+	{onclick}
+	class="block rounded-[var(--radius-lg)] p-4 {!voice && (href || onnavigate)
+		? 'cursor-pointer active:opacity-65'
 		: ''}"
+	style="background: var(--color-surface); {href ? `view-transition-name: note-${note.id};` : ''}"
 >
 	<p class="text-[0.72rem] font-bold tabular-nums" style="color: var(--color-ink-faint);">
 		{timeOfDay(note.created_at)}
 	</p>
 
-	<div class="mt-1 flex items-start gap-3.5">
-		{#if image}
-			<img
-				src={image}
-				alt=""
-				loading="lazy"
-				class="h-[60px] w-[60px] shrink-0 rounded-[17px] object-cover"
-				style="background: var(--color-surface-2);"
-			/>
-		{/if}
-		<div class="min-w-0 flex-1">
-			{#if heading}
-				<p
-					class="line-clamp-2 font-serif text-[1.02rem] leading-[1.32] font-semibold tracking-[-0.015em]"
-				>
-					{heading}
-				</p>
+	{#if voice}
+		<VoiceNote
+			noteId={note.id}
+			{voice}
+			{href}
+			class="mt-2"
+			onopen={onnavigate ? () => onnavigate(note.id) : undefined}
+		/>
+	{/if}
+
+	{#if image || heading || body}
+		<div class="mt-1 flex items-start gap-3.5" class:mt-3={voice}>
+			{#if image}
+				<img
+					src={image}
+					alt=""
+					loading="lazy"
+					class="h-[60px] w-[60px] shrink-0 rounded-[17px] object-cover"
+					style="background: var(--color-surface-2);"
+				/>
 			{/if}
-			{#if body}
-				<p
-					class="font-serif text-[1.06rem] leading-[1.48] tracking-[-0.012em] whitespace-pre-wrap"
-					class:mt-1={heading}
-					style={heading ? 'color: var(--color-ink-2);' : ''}
-				>
-					{body}
-				</p>
-			{:else if !heading}
-				<p class="font-serif text-[1.06rem] italic" style="color: var(--color-ink-faint);">
-					Untitled
-				</p>
-			{/if}
+			<div class="min-w-0 flex-1">
+				{#if heading}
+					<p
+						class="line-clamp-2 font-serif text-[1.02rem] leading-[1.32] font-semibold tracking-[-0.015em]"
+					>
+						{heading}
+					</p>
+				{/if}
+				{#if body}
+					<p
+						class="font-serif text-[1.06rem] leading-[1.48] tracking-[-0.012em] whitespace-pre-wrap"
+						class:mt-1={heading}
+						style={heading ? 'color: var(--color-ink-2);' : ''}
+					>
+						{body}
+					</p>
+				{:else if !heading && !voice}
+					<p class="font-serif text-[1.06rem] italic" style="color: var(--color-ink-faint);">
+						Untitled
+					</p>
+				{/if}
+			</div>
 		</div>
-	</div>
+	{/if}
 
 	{#if note.tags.length > 0 || note.source_url}
 		<div class="mt-1.5 flex items-center gap-2 text-[0.75rem] font-bold">

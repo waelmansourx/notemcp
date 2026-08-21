@@ -3,8 +3,15 @@
 	import { page } from '$app/state';
 	import { openFilter } from '$lib/filter.svelte';
 	import { showToast } from '$lib/toast.svelte';
-	import { queueNote, syncEntry } from '$lib/outbox';
-	import { addPending, settlePending, removePending } from '$lib/stream.svelte';
+	import { queueNote, syncEntry, type OutboxEntry } from '$lib/outbox';
+	import { addPending, settlePending, removePending, updatePendingVoice } from '$lib/stream.svelte';
+	import { beginMediaUpload } from '$lib/media';
+	import {
+		loadVoiceCaptures,
+		removeVoiceCapture,
+		storeVoiceCapture,
+		type VoiceCapture
+	} from '$lib/voice-outbox';
 	import { normalizeTagName } from '$lib/tags';
 	import { continuation, detach, touch, restore } from '$lib/composer.svelte';
 	import { saveDraft, readDraft, clearDraft } from '$lib/draft.svelte';
@@ -16,7 +23,7 @@
 	import TagPicker from './TagPicker.svelte';
 	import AttachmentTray from './AttachmentTray.svelte';
 	import LinkPreviewCard from './LinkPreviewCard.svelte';
-	import { onMount } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
 	import { fly, fade, scale } from 'svelte/transition';
 	import { quintOut } from 'svelte/easing';
 
@@ -59,8 +66,9 @@
 	let textarea = $state<HTMLTextAreaElement | null>(null);
 
 	let recording = $state(false);
+	let recordingStarting = $state(false);
 	let seconds = $state(0);
-	let interim = $state('');
+	let liveLevel = $state(0);
 	let voiceError = $state('');
 
 	let photoInput = $state<HTMLInputElement | null>(null);
@@ -179,7 +187,6 @@
 
 	function closeSheet() {
 		open = false;
-		interim = '';
 	}
 
 	/** Closing is not publishing. The draft effect above has already kept the
@@ -392,97 +399,294 @@
 
 	/* ---------------- voice ---------------- */
 
-	type SpeechCtor = new () => any;
+	let mediaRecorder: MediaRecorder | null = null;
+	let microphone: MediaStream | null = null;
+	let audioContext: AudioContext | null = null;
+	let meterFrame: number | null = null;
+	let recordedParts: BlobPart[] = [];
+	let recordedAudio: Promise<Blob> | null = null;
+	let resolveRecordedAudio: ((blob: Blob) => void) | null = null;
+	let recordingStartedAt = 0;
+	let waveformSamples: number[] = [];
+	let recordingTags: string[] = [];
+	let recordingParentId: string | null = null;
+	let timer: ReturnType<typeof setInterval> | null = null;
+	let destroyed = false;
+	const processingVoice = new Set<string>();
+	const localVoiceUrls = new Map<string, string>();
 
-	function speechCtor(): SpeechCtor | null {
-		if (typeof window === 'undefined') return null;
-		return (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition ?? null;
+	function recordingMimeType(): string {
+		for (const type of [
+			'audio/webm;codecs=opus',
+			'audio/mp4',
+			'audio/webm',
+			'audio/ogg;codecs=opus'
+		]) {
+			if (MediaRecorder.isTypeSupported(type)) return type;
+		}
+		return '';
 	}
 
-	let recognition: any = null;
-	let timer: ReturnType<typeof setInterval> | null = null;
+	function sampledWaveform(samples: number[], count = 32): number[] {
+		if (samples.length === 0) return Array.from({ length: count }, () => 8);
+		return Array.from({ length: count }, (_, index) => {
+			const start = Math.floor((index * samples.length) / count);
+			const end = Math.max(start + 1, Math.floor(((index + 1) * samples.length) / count));
+			const slice = samples.slice(start, end);
+			return Math.max(4, Math.min(100, Math.round(Math.max(...slice))));
+		});
+	}
 
-	function startRecording() {
-		const Ctor = speechCtor();
-		if (!Ctor) {
-			// No on-device recognition here — fall back to the keyboard rather
-			// than pretending to record something we can't turn into a thought.
-			voiceError = 'Voice capture needs Chrome or Safari on this device.';
+	function startMeter(stream: MediaStream) {
+		const AudioContextConstructor =
+			window.AudioContext ??
+			(window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+		if (!AudioContextConstructor) return;
+
+		audioContext = new AudioContextConstructor();
+		const analyser = audioContext.createAnalyser();
+		analyser.fftSize = 256;
+		audioContext.createMediaStreamSource(stream).connect(analyser);
+		const values = new Uint8Array(analyser.fftSize);
+		let sampledAt = 0;
+
+		const sample = (now: number) => {
+			analyser.getByteTimeDomainData(values);
+			let energy = 0;
+			for (const value of values) {
+				const centered = (value - 128) / 128;
+				energy += centered * centered;
+			}
+			const level = Math.min(100, Math.round(Math.sqrt(energy / values.length) * 260));
+			liveLevel = level;
+			if (now - sampledAt >= 100) {
+				waveformSamples.push(level);
+				sampledAt = now;
+			}
+			meterFrame = requestAnimationFrame(sample);
+		};
+		meterFrame = requestAnimationFrame(sample);
+	}
+
+	function stopMeter() {
+		if (meterFrame !== null) cancelAnimationFrame(meterFrame);
+		meterFrame = null;
+		liveLevel = 0;
+		audioContext?.close().catch(() => {});
+		audioContext = null;
+	}
+
+	function provisionalEntry(capture: VoiceCapture, localUrl: string): OutboxEntry {
+		return {
+			client_id: capture.clientId,
+			title: '',
+			content_markdown: '',
+			source_url: null,
+			source_type: 'voice',
+			source_title: null,
+			source_description: null,
+			source_image: null,
+			parent_id: capture.parentId,
+			tagNames: capture.tagNames,
+			voice: {
+				media_id: null,
+				duration_ms: capture.durationMs,
+				waveform: capture.waveform,
+				local_url: localUrl
+			},
+			queued_at: capture.queuedAt
+		};
+	}
+
+	async function processVoiceCapture(capture: VoiceCapture, storedLocally = true) {
+		if (processingVoice.has(capture.clientId)) return;
+		processingVoice.add(capture.clientId);
+
+		let localUrl = localVoiceUrls.get(capture.clientId);
+		if (!localUrl) {
+			localUrl = URL.createObjectURL(capture.blob);
+			localVoiceUrls.set(capture.clientId, localUrl);
+		}
+		addPending(provisionalEntry(capture, localUrl));
+
+		try {
+			const upload = await beginMediaUpload(capture.blob, 'audio');
+			updatePendingVoice(capture.clientId, { media_id: upload.id });
+			await upload.whenUploaded;
+
+			// Only now is the regular localStorage outbox allowed to own the
+			// capture: R2 has the actual source, so replaying this metadata can
+			// never create a voice thought whose audio vanished with the tab.
+			const entry = queueNote({
+				client_id: capture.clientId,
+				title: '',
+				content_markdown: '',
+				source_url: null,
+				source_type: 'voice',
+				source_title: null,
+				source_description: null,
+				source_image: null,
+				parent_id: capture.parentId,
+				tagNames: capture.tagNames,
+				voice: {
+					media_id: upload.id,
+					duration_ms: capture.durationMs,
+					waveform: capture.waveform
+				}
+			});
+
+			updatePendingVoice(capture.clientId, { media_id: upload.id, local_url: null });
+			URL.revokeObjectURL(localUrl);
+			localVoiceUrls.delete(capture.clientId);
+			await removeVoiceCapture(capture.clientId);
+
+			syncEntry(
+				entry,
+				async (id) => {
+					settlePending(entry.client_id, id);
+					await invalidateAll();
+					removePending(entry.client_id);
+				},
+				() => showToast('Voice note is safe in R2 — will sync', { duration: 2800 })
+			);
+		} catch {
+			showToast(
+				storedLocally
+					? 'Voice note saved on this device — waiting to upload'
+					: 'Keep this page open so the voice note can retry',
+				{ duration: 3200 }
+			);
+		} finally {
+			processingVoice.delete(capture.clientId);
+		}
+	}
+
+	async function recoverVoiceCaptures() {
+		const captures = await loadVoiceCaptures();
+		await Promise.all(captures.map((capture) => processVoiceCapture(capture)));
+	}
+
+	onMount(() => {
+		recoverVoiceCaptures();
+		window.addEventListener('online', recoverVoiceCaptures);
+		return () => window.removeEventListener('online', recoverVoiceCaptures);
+	});
+
+	async function startRecording() {
+		if (recording || recordingStarting) return;
+		if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+			voiceError = 'Voice recording is not supported by this browser.';
 			openSheet();
 			return;
 		}
 
-		selected = defaultTags();
-		interim = '';
-		seconds = 0;
-		recording = true;
-		timer = setInterval(() => seconds++, 1000);
-
-		recognition = new Ctor();
-		recognition.continuous = true;
-		recognition.interimResults = true;
-		recognition.lang = navigator.language || 'en-US';
-
-		let settled = '';
-		recognition.onresult = (event: any) => {
-			let pending = '';
-			for (let i = event.resultIndex; i < event.results.length; i++) {
-				const result = event.results[i];
-				if (result.isFinal) settled += result[0].transcript;
-				else pending += result[0].transcript;
-			}
-			interim = (settled + pending).trim();
-		};
-		recognition.onerror = (event: any) => {
-			if (!recording) return;
-			// A no-speech timeout or a transient network blip is common mid-
-			// dictation and used to wipe out everything said before it — treat
-			// it as a cancel only when nothing was actually transcribed yet.
-			// When something was, stop cleanly so it saves like a normal Keep.
-			const captured = interim.trim();
-			if (!captured) {
-				voiceError =
-					event?.error === 'not-allowed'
-						? "Voice capture needs microphone access — check this site's permissions."
-						: "Didn't catch that — try again or just type it.";
-				openSheet();
-			}
-			stopRecording(!captured);
-		};
-		recognition.onend = () => {
-			if (recording) stopRecording();
-		};
-
+		recordingStarting = true;
+		voiceError = '';
 		try {
-			recognition.start();
-		} catch {
-			stopRecording(true);
+			const stream = await navigator.mediaDevices.getUserMedia({
+				audio: { echoCancellation: true, noiseSuppression: true }
+			});
+			if (destroyed) {
+				stream.getTracks().forEach((track) => track.stop());
+				return;
+			}
+			microphone = stream;
+			const mimeType = recordingMimeType();
+			mediaRecorder = new MediaRecorder(microphone, {
+				...(mimeType ? { mimeType } : {}),
+				audioBitsPerSecond: 64_000
+			});
+			const outputMimeType = mediaRecorder.mimeType || mimeType || 'audio/webm';
+			recordedParts = [];
+			waveformSamples = [];
+			recordingTags = (selected.length > 0 ? selected : defaultTags())
+				.map(normalizeTagName)
+				.filter(Boolean);
+			recordingParentId = continuation.target?.id ?? null;
+			recordedAudio = new Promise((resolve) => (resolveRecordedAudio = resolve));
+			mediaRecorder.ondataavailable = (event) => {
+				if (event.data.size > 0) recordedParts.push(event.data);
+			};
+			mediaRecorder.onstop = () => {
+				resolveRecordedAudio?.(new Blob(recordedParts, { type: outputMimeType }));
+				resolveRecordedAudio = null;
+			};
+			mediaRecorder.onerror = () => {
+				voiceError = "Couldn't keep recording — the audio captured so far will be saved.";
+				void stopRecording();
+			};
+
+			seconds = 0;
+			recordingStartedAt = performance.now();
+			recording = true;
+			mediaRecorder.start(1_000);
+			startMeter(microphone);
+			timer = setInterval(() => seconds++, 1_000);
+		} catch (cause) {
+			microphone?.getTracks().forEach((track) => track.stop());
+			microphone = null;
+			voiceError =
+				cause instanceof DOMException && cause.name === 'NotAllowedError'
+					? "Voice recording needs microphone access — check this site's permissions."
+					: "Couldn't start voice recording — try again or type instead.";
+			openSheet();
+		} finally {
+			recordingStarting = false;
 		}
 	}
 
-	function stopRecording(cancelled = false) {
+	async function stopRecording(cancelled = false) {
+		const recorder = mediaRecorder;
+		const audio = recordedAudio;
+		if (!recorder || !audio) return;
+		mediaRecorder = null;
+		recordedAudio = null;
 		recording = false;
 		if (timer) clearInterval(timer);
 		timer = null;
-		try {
-			recognition?.stop();
-		} catch {
-			/* already stopped */
+		const durationMs = Math.max(0, Math.round(performance.now() - recordingStartedAt));
+		if (recorder.state !== 'inactive') recorder.stop();
+		microphone?.getTracks().forEach((track) => track.stop());
+		microphone = null;
+		stopMeter();
+
+		const blob = await audio;
+		if (cancelled) return;
+		if (blob.size === 0 || durationMs < 160) {
+			voiceError = 'That recording was too short — try again.';
+			openSheet();
+			return;
 		}
-		recognition = null;
 
-		const captured = interim.trim();
-		interim = '';
-		if (cancelled || !captured) return;
-
-		text = captured;
-		save();
+		const capture: VoiceCapture = {
+			clientId: crypto.randomUUID(),
+			blob,
+			durationMs,
+			waveform: sampledWaveform(waveformSamples),
+			tagNames: recordingTags,
+			parentId: recordingParentId,
+			queuedAt: new Date().toISOString()
+		};
+		const stored = await storeVoiceCapture(capture);
+		touch();
+		void processVoiceCapture(capture, stored);
 	}
 
 	function cancelRecording() {
-		interim = '';
-		stopRecording(true);
+		void stopRecording(true);
 	}
+
+	onDestroy(() => {
+		destroyed = true;
+		// Navigating mid-recording should not leave the microphone running or
+		// discard what was already said. Finalize it into the same IndexedDB →
+		// R2 path as an explicit Keep.
+		if (recording) void stopRecording();
+		else {
+			microphone?.getTracks().forEach((track) => track.stop());
+			stopMeter();
+		}
+	});
 
 	function onKeydown(event: KeyboardEvent) {
 		if (event.key === 'Enter') {
@@ -521,7 +725,7 @@
 <div
 	class="pointer-events-none fixed inset-x-0 bottom-0 z-20 flex flex-col items-center px-[18px] pt-10 lg:hidden"
 	style="background: linear-gradient(180deg, transparent 0%, color-mix(in srgb, var(--color-bg) 90%, transparent) 42%, var(--color-bg) 68%); padding-bottom: calc(1.75rem + env(safe-area-inset-bottom));"
-	class:opacity-0={open || recording}
+	class:opacity-0={open || recording || recordingStarting}
 >
 	<div class="flex w-full max-w-2xl flex-col gap-2">
 		<!-- You are in a thread. This is the only thing on screen that says so
@@ -577,6 +781,7 @@
 				</span>
 				<button
 					type="button"
+					disabled={recordingStarting}
 					aria-label="Record a thought"
 					class="grid h-[46px] w-[46px] shrink-0 place-items-center rounded-[14px] active:scale-95"
 					style="background: rgba(255,255,255,.16); color: var(--color-accent-ink);"
@@ -629,7 +834,17 @@
 		<span class="h-2.5 w-2.5 shrink-0 animate-pulse rounded-full" style="background: #ff7b7b;"
 		></span>
 		<span class="shrink-0 text-[0.85rem] font-medium tabular-nums">{clock}</span>
-		<span class="min-w-0 flex-1 truncate text-[0.85rem] opacity-80">{interim || 'Listening…'}</span>
+		<span class="flex min-w-0 flex-1 items-center gap-[3px]" aria-label="Recording audio">
+			{#each [0.45, 0.72, 1, 0.62, 0.82, 0.52, 0.9, 0.66, 0.48, 0.76, 0.58, 0.88] as weight, index (index)}
+				<span
+					class="w-[3px] rounded-full"
+					style="height: {Math.max(
+						4,
+						Math.round(4 + liveLevel * weight * 0.18)
+					)}px; background: rgba(255,255,255,.58); transition: height 80ms linear;"
+				></span>
+			{/each}
+		</span>
 		<button
 			type="button"
 			class="shrink-0 rounded-[0.56rem] px-3 py-1.5 text-[0.8rem] font-semibold"
@@ -799,6 +1014,7 @@
 
 		<button
 			type="button"
+			disabled={recordingStarting}
 			aria-label="Voice"
 			class="grid h-9 w-9 shrink-0 place-items-center rounded-full"
 			style="background: var(--color-surface-2); color: var(--color-ink-2);"
@@ -868,6 +1084,7 @@
 
 		<button
 			type="button"
+			disabled={recordingStarting}
 			aria-label={hasContent ? 'Keep' : 'Record'}
 			class="grid h-[2.875rem] w-[2.875rem] shrink-0 place-items-center rounded-full active:scale-95"
 			style="background: var(--color-accent); color: var(--color-accent-ink);"
@@ -942,7 +1159,7 @@
 	<div
 		class="pointer-events-none fixed bottom-0 z-20 hidden -translate-x-1/2 pb-8 lg:flex"
 		style="left: calc(50% + 8rem); width: min(42rem, calc(100vw - 22rem));"
-		class:opacity-0={recording}
+		class:opacity-0={recording || recordingStarting}
 	>
 		<div
 			class="pointer-events-auto flex w-full flex-col rounded-[0.9rem] px-[1.125rem] pt-[0.625rem] pb-3"

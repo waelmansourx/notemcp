@@ -65,6 +65,18 @@ export const DELETE: RequestHandler = async ({ params, locals: { supabase, user 
 	const row = await ownRow(supabase, user.id, params.id!);
 	if (!row) throw error(404, 'Not found');
 
+	// Never remove the source of truth out from under a voice thought. The
+	// database FK also restricts this, but checking before the R2 DELETE is
+	// essential: deleting the object first would leave a valid-looking media
+	// row whose recording no longer exists when the later SQL delete fails.
+	const { data: voiceReference, error: referenceError } = await supabase
+		.from('voice_notes')
+		.select('note_id')
+		.eq('media_id', row.id)
+		.maybeSingle();
+	if (referenceError) throw error(500, referenceError.message);
+	if (voiceReference) throw error(409, 'This recording belongs to a voice note');
+
 	await deleteObject(row.r2_key);
 
 	const { error: deleteError } = await supabase.from('media').delete().eq('id', row.id);

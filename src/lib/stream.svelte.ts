@@ -32,7 +32,19 @@ export function asNote(entry: OutboxEntry): Note {
 		created_at: entry.queued_at,
 		updated_at: entry.queued_at,
 		deleted_at: null,
-		tags: entry.tagNames.map((name) => ({ id: `pending:${name}`, name }))
+		tags: entry.tagNames.map((name) => ({ id: `pending:${name}`, name })),
+		voice_note: entry.voice
+			? {
+					media_id: entry.voice.media_id,
+					duration_ms: entry.voice.duration_ms,
+					waveform: entry.voice.waveform,
+					transcription_status: 'pending',
+					raw_text: null,
+					error: null,
+					language_code: null,
+					local_url: entry.voice.local_url ?? null
+				}
+			: null
 	};
 }
 
@@ -42,7 +54,22 @@ export function isPending(note: Note): boolean {
 }
 
 export function addPending(entry: OutboxEntry) {
-	pending.items = [asNote(entry), ...pending.items];
+	const note = asNote(entry);
+	const existing = pending.items.findIndex((item) => item.client_id === entry.client_id);
+	if (existing === -1) pending.items = [note, ...pending.items];
+	else pending.items = pending.items.map((item, index) => (index === existing ? note : item));
+}
+
+/** Replace the provisional local playback details as an upload advances. */
+export function updatePendingVoice(
+	clientId: string,
+	patch: Partial<NonNullable<Note['voice_note']>>
+) {
+	pending.items = pending.items.map((note) =>
+		note.client_id === clientId && note.voice_note
+			? { ...note, voice_note: { ...note.voice_note, ...patch } }
+			: note
+	);
 }
 
 /**

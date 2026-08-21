@@ -8,13 +8,15 @@
 		placeholder = 'Write something…',
 		focused = $bindable(false),
 		onlinkpaste,
-		onimages
+		onimages,
+		onchange
 	}: {
 		value?: string;
 		placeholder?: string;
 		focused?: boolean;
 		onlinkpaste?: (url: string) => void;
 		onimages?: (files: File[]) => void;
+		onchange?: (value: string) => void;
 	} = $props();
 
 	let host: HTMLDivElement;
@@ -58,7 +60,10 @@
 				parent: host,
 				doc: value,
 				placeholder,
-				onChange: (next) => (value = next),
+				onChange: (next) => {
+					value = next;
+					onchange?.(next);
+				},
 				onFocusChange: (next) => (focused = next),
 				onLinkPaste: onlinkpaste,
 				onImages: onimages
