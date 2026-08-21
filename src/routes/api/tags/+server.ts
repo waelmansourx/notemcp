@@ -2,9 +2,10 @@ import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import type { Tag, ThreadStub } from '$lib/types';
 import { normalizeTagName, tagCovers } from '$lib/tags';
+import { previewImageFor } from '$lib/preview-image';
 
 const PREVIEW_SELECT =
-	'id, title, source_title, source_image, source_url, updated_at, thread_count, preview, note_tags(tags(id, name))';
+	'id, title, source_title, source_image, source_url, preview_image, updated_at, thread_count, preview, note_tags(tags(id, name))';
 
 function label(row: any): string {
 	const raw = (row.source_title || row.title || row.preview || '').replace(/\s+/g, ' ').trim();
@@ -29,7 +30,7 @@ function stubOf(row: any): ThreadStub {
 	return {
 		id: row.id,
 		label: label(row),
-		image: row.source_image ?? null,
+		image: previewImageFor(row),
 		source: hostname(row.source_url ?? null),
 		count: row.thread_count ?? 0,
 		at: row.updated_at,
