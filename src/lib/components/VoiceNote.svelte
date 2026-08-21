@@ -5,6 +5,7 @@
 	let {
 		noteId,
 		voice,
+		pending = false,
 		href = null,
 		class: className = '',
 		ontranscript,
@@ -12,6 +13,7 @@
 	}: {
 		noteId: string;
 		voice: VoiceNoteData;
+		pending?: boolean;
 		href?: string | null;
 		class?: string;
 		ontranscript?: (text: string) => void;
@@ -31,7 +33,7 @@
 
 	$effect(() => {
 		const status = current.transcription_status;
-		if (noteId.startsWith('pending:') || (status !== 'pending' && status !== 'processing')) {
+		if (pending || (status !== 'pending' && status !== 'processing')) {
 			return;
 		}
 
@@ -94,7 +96,7 @@
 	}
 
 	async function retry() {
-		if (retrying || noteId.startsWith('pending:')) return;
+		if (retrying || pending) return;
 		retrying = true;
 		try {
 			const response = await fetch(`/api/notes/${noteId}/transcription`, { method: 'POST' });
@@ -178,7 +180,7 @@
 					{/if}
 				{:else if current.transcription_status === 'failed'}
 					Transcription failed
-				{:else if noteId.startsWith('pending:')}
+				{:else if pending}
 					Saved locally · uploading…
 				{:else}
 					{#if onopen}
@@ -190,7 +192,7 @@
 					{/if}
 				{/if}
 			</span>
-			{#if current.transcription_status === 'failed' && !noteId.startsWith('pending:')}
+			{#if current.transcription_status === 'failed' && !pending}
 				<button
 					type="button"
 					disabled={retrying}
