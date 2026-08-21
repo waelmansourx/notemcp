@@ -79,16 +79,21 @@
 						style="background: var(--color-surface-2);"
 					>
 						{#if note.image}
-							<!-- The soft cover layer makes portrait, square and landscape sources
-							     belong to the same card shape; the foreground always remains whole. -->
+							<!-- Use the image itself as the card's ambient color. Keep it much
+							     more saturated/visible than the foreground blend so portrait and
+							     square sources feel intentional rather than sitting in a dull box. -->
 							<img
 								src={note.image}
 								alt=""
 								loading="lazy"
 								aria-hidden="true"
-								class="absolute inset-0 h-full w-full scale-110 object-cover blur-xl opacity-45"
+								class="absolute inset-0 h-full w-full scale-125 object-cover blur-lg opacity-75"
+								style="filter: blur(14px) saturate(1.75) contrast(1.08);"
 							/>
-							<div class="absolute inset-0" style="background: color-mix(in srgb, var(--color-surface-2) 34%, transparent);"></div>
+							<div
+								class="absolute inset-0"
+								style="background: color-mix(in srgb, var(--color-surface-2) 12%, transparent);"
+							></div>
 							<img
 								src={note.image}
 								alt=""
