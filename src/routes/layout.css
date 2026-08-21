@@ -1,37 +1,27 @@
 @import 'tailwindcss';
 
 @theme {
-	--color-bg: #faf9f6;
-	--color-surface: #ffffff;
-	--color-surface-2: #f2f0e9;
-	--color-border: #ebe9e2;
-	--color-ink: #15150f;
-	--color-ink-2: #45443c;
-	--color-ink-muted: #6b6a61;
-	--color-ink-faint: #96958c;
-	--color-accent: #1b5741;
-	--color-accent-soft: #e7efea;
-	--color-accent-ink: #ffffff;
-	/* The namespace half of a path tag. A second hue rather than a lighter
-	   green, so "#notemcp/bug" reads as two parts at a glance instead of one
-	   long word — warm ochre sits with the paper background and stays clearly
-	   apart from the accent the leaf keeps. */
-	--color-accent-path: #8a6a2f;
+	--color-bg: #f6f1e6;
+	--color-surface: #fdfaf3;
+	--color-surface-2: #efe8d9;
+	--color-border: #e6dfcf;
+	--color-ink: #211f1c;
+	--color-ink-2: #3d3a34;
+	--color-ink-muted: #6b6459;
+	--color-ink-faint: #a8a094;
+	--color-accent: #640332;
+	--color-accent-soft: #f0e3e8;
+	--color-accent-ink: #f7f2e8;
+	--color-accent-path: #2f5241;
 	--color-danger: #96393c;
 	--color-danger-soft: #f7ecec;
-	/* The share sheet's confirmation state. These were referenced by
-	   /capture but never defined, so the "Saved" checkmark was drawn in
-	   transparent-on-transparent — i.e. invisible. */
-	--color-success: #1b5741;
-	--color-success-soft: #dfeee6;
+	--color-success: #2f5241;
+	--color-success-soft: #e2ece6;
 
 	--radius-sm: 0.44rem;
-	--radius-md: 0.56rem;
+	--radius-md: 0.62rem;
 	--radius-lg: 0.88rem;
 
-	/* Both self-hosted below (src/lib/assets/fonts.css) — no Google Fonts
-	   request at runtime. System fonts trail as fallbacks for the split
-	   second before each downloads, and forever if it fails to. */
 	--font-sans:
 		'Inter Variable', -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
 	--font-serif: 'Newsreader Variable', Georgia, 'Iowan Old Style', 'Times New Roman', serif;
@@ -40,22 +30,22 @@
 
 @media (prefers-color-scheme: dark) {
 	:root {
-		--color-bg: #14140f;
-		--color-surface: #1c1c16;
-		--color-surface-2: #24241c;
-		--color-border: #2c2b23;
-		--color-ink: #f2efe6;
-		--color-ink-2: #cdcabe;
-		--color-ink-muted: #9c9a8f;
-		--color-ink-faint: #6e6d63;
-		--color-accent: #5fbf95;
-		--color-accent-soft: #1b2e26;
-		--color-accent-ink: #10201a;
-		--color-accent-path: #d9b877;
+		--color-bg: #181512;
+		--color-surface: #211d19;
+		--color-surface-2: #2a251f;
+		--color-border: #373027;
+		--color-ink: #f3ede2;
+		--color-ink-2: #d8d0c4;
+		--color-ink-muted: #aaa095;
+		--color-ink-faint: #7f766c;
+		--color-accent: #cf7fa1;
+		--color-accent-soft: #39212b;
+		--color-accent-ink: #241018;
+		--color-accent-path: #8fbea5;
 		--color-danger: #e0827f;
 		--color-danger-soft: #2e1e1e;
-		--color-success: #5fbf95;
-		--color-success-soft: #17301f;
+		--color-success: #8fbea5;
+		--color-success-soft: #1d3026;
 	}
 }
 
@@ -66,7 +56,9 @@ html {
 
 body {
 	min-height: 100%;
-	background: var(--color-bg);
+	background-color: var(--color-bg);
+	background-image: radial-gradient(color-mix(in srgb, var(--color-ink) 7%, transparent) 0.5px, transparent 0.65px);
+	background-size: 3px 3px;
 	color: var(--color-ink);
 	font-family: var(--font-sans);
 	-webkit-tap-highlight-color: transparent;
@@ -93,47 +85,30 @@ textarea {
 	field-sizing: content;
 }
 
-/* ---------------------------------------------------------------
-   Tags.
-
-   Not a pill, not a badge — just the word in the accent colour, the way
-   you'd write it in a sentence. The old chip put a filled capsule around
-   every tag, which made a note with three tags read as a row of buttons
-   competing with the thought itself.
-   --------------------------------------------------------------- */
 .tag {
 	display: inline;
 	white-space: nowrap;
-	font-size: 0.82rem;
-	font-weight: 700;
-	letter-spacing: -0.012em;
-	color: var(--color-accent);
-}
-.tag-path {
+	font-size: 0.76rem;
+	font-weight: 600;
+	letter-spacing: -0.01em;
 	color: var(--color-accent-path);
 }
+.tag-path {
+	color: var(--color-accent);
+}
 .tag-lg {
-	font-size: 1.12rem;
-	font-weight: 700;
-	letter-spacing: -0.022em;
+	font-family: var(--font-serif);
+	font-size: 1.62rem;
+	font-weight: 500;
+	letter-spacing: -0.018em;
 }
 
-/* Hairline separator between stream entries. */
 .entry + .entry,
 .entry + .entry-group,
 .entry-group + .entry {
 	border-top: 1px solid var(--color-border);
 }
 
-/* ---------------------------------------------------------------
-   Desktop pointer feedback.
-
-   Every control here signals a tap with the active:opacity/active:scale
-   classes already on it — a mouse has no "active" state to speak of, so
-   without this a desktop visitor gets no response at all until the click
-   lands. Scoped to hover-capable, fine pointers so it never fires from a
-   touch tap (which would otherwise stick after the finger lifts).
-   --------------------------------------------------------------- */
 @media (hover: hover) and (pointer: fine) {
 	a[href],
 	button:not(:disabled),
@@ -147,28 +122,15 @@ textarea {
 	}
 }
 
-/* Keyboard focus is far more common on desktop than on a touch device, so
-   the outline the components above suppress (for a clean tap) comes back
-   for :focus-visible — a click or tap still lands silently. */
 a[href]:focus-visible,
 button:not(:disabled):focus-visible,
 [role='button']:focus-visible,
 input:focus-visible,
 textarea:focus-visible {
-	outline: none;
-	outline-offset: 2px;
+	outline: 2px solid color-mix(in srgb, var(--color-accent) 58%, transparent);
+	outline-offset: 3px;
 }
 
-/* ---------------------------------------------------------------
-   View transitions.
-
-   An entry in the stream and the editor's title+body card share a
-   `view-transition-name` (see Entry.svelte / NoteEditor.svelte), so
-   opening a note morphs the tapped entry into the editor instead of the
-   page just swapping — the stream isn't "linked away from," it grows.
-   Reduced-motion visitors get the same navigation with no animation:
-   the morph is a nicety, never the thing carrying the information.
-   --------------------------------------------------------------- */
 @media (prefers-reduced-motion: reduce) {
 	::view-transition-group(*),
 	::view-transition-old(*),
