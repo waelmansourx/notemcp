@@ -83,7 +83,7 @@
 	// offers a thread to file under before you've written anything: the chip
 	// below only shows a thread you already chose from the note itself.
 	// Your own tags first, topped up from the defaults so the grid is always
-	// full — six is what fits two rows without the sheet growing a scroll.
+	// full — five plus the editor card fills the 3×2 grid.
 	// Read from the local cache rather than `page.data`: the layout streams the
 	// row now, and the share sheet is the one surface that can't afford to wait
 	// for it — you're here for two seconds, and the tags have to be there on
@@ -175,28 +175,17 @@
 		await sharedImages.waitForIds();
 	}
 
-	// Android launches a share-target navigation as a fresh activity with no
-	// prior history, which is precisely the condition browsers require to
-	// honor a script-initiated window.close() — so this has a real shot at
-	// dropping the user straight back into the app they shared from. We move
-	// to "/" first (replacing this history entry) before trying, so that if
-	// the OS kills the process before close() lands, relaunching the app
-	// resumes on the home river instead of a dead capture screen.
+	// Hide the capture surface immediately. Navigation and network cleanup can
+	// finish after the UI has already responded to the tap, instead of making
+	// a successful local save feel blocked by route loading.
 	async function leave(sending?: Promise<unknown>) {
-		// The history entry is what has to land before close() — not the root
-		// layout's own streamed data. Waiting on goto() unconditionally meant
-		// a slow or flaky connection right after a share intent could leave the
-		// sheet stuck on screen indefinitely; capping the wait keeps this
-		// bounded without giving up the safety net the history replace exists
-		// for.
-		await Promise.race([
+		dismissed = true;
+		const navigation = Promise.race([
 			goto('/', { replaceState: true, noScroll: true }),
 			new Promise((resolve) => setTimeout(resolve, 800))
 		]);
-		dismissed = true;
-		// Closing the tab aborts anything still in flight, so that — and only
-		// that — waits for the upload. The sheet is already gone by then.
-		if (sending) await sending.catch(() => {});
+
+		await Promise.allSettled([navigation, sending ?? Promise.resolve()]);
 		window.close();
 	}
 
@@ -247,18 +236,12 @@
 		touch();
 
 		// The note is durable in localStorage the moment queueNote() returns,
-		// and the server now keys on client_id so a retry can't duplicate it.
-		// Nothing about the round trip is worth standing still for: show it in
-		// the stream and go. Waiting on the upload here — which is what the
-		// image path used to do — is what made saving a shared photo feel like
-		// the app had hung.
+		// and the server keys on client_id so a retry cannot duplicate it.
 		addPending(entry);
 		const uploadsFinished = sharedImages.waitForUploads();
 		leave(
 			Promise.all([
 				syncEntryNow(entry).then((noteId) => {
-					// Once it's on the server the stream will load it for real, so the
-					// local stand-in has done its job.
 					if (noteId) removePending(entry.client_id);
 				}),
 				uploadsFinished
@@ -293,16 +276,6 @@
 		onclick={() => leave()}
 		role="presentation"
 	>
-		<!--
-			The share sheet, speaking the composer's language.
-
-			It used to answer "where does this go?" with a 3×2 grid of five
-			hard-coded tags — six big targets competing for attention before
-			you'd even read what you shared. Now it's the same three rows the
-			in-app composer uses, in the same order: what you're saving, where
-			it continues, what it's about. The primary action is still exactly
-			one tap away.
-		-->
 		<div
 			class="flex max-h-[92vh] flex-col rounded-t-[1.375rem] px-[1.125rem] pt-[0.625rem]"
 			style={sharedImages.dragging
@@ -317,19 +290,12 @@
 			ondrop={onSharedImageDrop}
 			role="presentation"
 		>
-			<!-- Focusing while the sheet is still translating up gets a visible
-			     caret but no keyboard on Android — the IME wants the field settled
-			     first. Waiting for the sheet's own entrance transition to finish
-			     is a free, reliable signal for "settled" without a magic delay. -->
 			<div
 				class="mx-auto mb-3 h-1 w-9 shrink-0 rounded-full"
 				style="background: var(--color-border);"
 			></div>
 
 			<div class="min-h-0 flex-1 overflow-y-auto">
-				<!-- What you shared. Its own words stay secondary to yours: the
-				     caption box below is the serif one, because the note is your
-				     thought and not the article's headline. -->
 				{#if sharedImageLoading}
 					<div
 						class="mb-3 flex h-28 items-center justify-center rounded-[16px]"
@@ -367,7 +333,6 @@
 				></textarea>
 			</div>
 
-			<!-- Where it goes, then what it's about — the composer's order. -->
 			{#if continuation.target}
 				<div class="mb-2.5 flex shrink-0 items-center gap-2 rounded-[14px] py-1.5 pr-1.5 pl-2.5">
 					<span class="shrink-0 text-[0.85rem] leading-none" style="color: var(--color-accent);"
@@ -399,28 +364,24 @@
 				</div>
 			{/if}
 
-			<!-- Tags are choices, not six little destination cards. A single
-			     scrolling line keeps every option one tap away without wrapping
-			     the sheet in another grid of rounded containers. -->
-			<div
-				class="mb-3 flex shrink-0 items-center gap-4 overflow-x-auto border-y py-3"
-				style="border-color: var(--color-border); scrollbar-width: none;"
-			>
+			<!-- Five one-tap tag destinations plus the editor, restored as a
+			     compact 3×2 card grid. -->
+			<div class="mb-2.5 grid shrink-0 grid-cols-3 gap-2.5">
 				{#each quickTags as tag (tag)}
 					<button
 						type="button"
 						disabled={submitted}
-						class="shrink-0 text-[0.85rem] font-bold tracking-[-0.01em] transition-transform active:scale-[0.97] disabled:opacity-40"
+						class="flex h-[4rem] min-w-0 flex-col justify-between rounded-[16px] p-2.5 text-left transition-transform active:scale-[0.97] disabled:opacity-40"
 						style={savedTag === tag
-							? 'color: var(--color-success);'
-							: 'color: var(--color-accent);'}
+							? 'background: var(--color-success-soft); color: var(--color-success);'
+							: 'background: var(--color-surface-2); color: var(--color-ink); border: 1px solid var(--color-border);'}
 						onclick={() => save([tag], tag)}
 					>
 						{#if savedTag === tag}
-							<span class="flex items-center gap-1.5">
+							<div class="flex h-full w-full items-center justify-center">
 								<svg
-									width="14"
-									height="14"
+									width="20"
+									height="20"
 									viewBox="0 0 24 24"
 									fill="none"
 									stroke="currentColor"
@@ -428,27 +389,27 @@
 									stroke-linecap="round"
 									stroke-linejoin="round"><path d="M20 6 9 17l-5-5" /></svg
 								>
-								#{tag}
-							</span>
+							</div>
 						{:else}
-							#{tag}
+							<span class="text-[1.05rem] font-bold leading-none" style="color: var(--color-ink-faint);">#</span>
+							<span class="w-full truncate text-[0.85rem] font-bold tracking-[-0.01em]">
+								{tag}
+							</span>
 						{/if}
 					</button>
 				{/each}
-
-				<span class="h-4 w-px shrink-0" style="background: var(--color-border);"></span>
 
 				<button
 					type="button"
 					aria-label="Open in the editor"
 					disabled={submitted}
-					class="flex shrink-0 items-center gap-1.5 text-[0.85rem] font-bold tracking-[-0.01em] transition-transform active:scale-[0.97] disabled:opacity-40"
-					style="color: var(--color-ink-muted);"
+					class="flex h-[4rem] min-w-0 flex-col justify-between rounded-[16px] p-2.5 text-left transition-transform active:scale-[0.97] disabled:opacity-40"
+					style="background: var(--color-ink); color: var(--color-surface);"
 					onclick={openInEditor}
 				>
 					<svg
-						width="14"
-						height="14"
+						width="16"
+						height="16"
 						viewBox="0 0 24 24"
 						fill="none"
 						stroke="currentColor"
@@ -459,16 +420,31 @@
 					>
 						<path d="M7 17 17 7M8 7h9v9" />
 					</svg>
-					Open editor
+					<span class="w-full truncate text-[0.85rem] font-bold tracking-[-0.01em]">Open</span>
 				</button>
 			</div>
 
-			<!-- Cancel is the one destructive move here, so it reads reddish. The
-				     "#" button is the tag picker: it drops a hashtag into the caption
-				     instead of opening a separate row, so Save no longer has to
-				     compete with a whole picker UI for attention — it's sized and
-				     coloured like the quick tags next to it rather than shouting. -->
 			<div class="flex shrink-0 items-center gap-2">
+				<!-- Cancel is deliberately the far-left action, away from Save. -->
+				<button
+					type="button"
+					aria-label="Cancel"
+					disabled={submitted}
+					class="grid h-[2.875rem] w-[2.875rem] shrink-0 place-items-center rounded-full disabled:opacity-40"
+					style="background: var(--color-danger-soft); color: var(--color-danger);"
+					onclick={() => leave()}
+				>
+					<svg
+						width="17"
+						height="17"
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="2.2"
+						stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg
+					>
+				</button>
+
 				<input
 					bind:this={sharedImageInput}
 					type="file"
@@ -504,29 +480,10 @@
 
 				<button
 					type="button"
-					aria-label="Cancel"
-					disabled={submitted}
-					class="grid h-[2.875rem] w-[2.875rem] shrink-0 place-items-center rounded-full disabled:opacity-40"
-					style="background: var(--color-danger-soft); color: var(--color-danger);"
-					onclick={() => leave()}
-				>
-					<svg
-						width="17"
-						height="17"
-						viewBox="0 0 24 24"
-						fill="none"
-						stroke="currentColor"
-						stroke-width="2.2"
-						stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg
-					>
-				</button>
-
-				<button
-					type="button"
 					aria-label="Add a tag"
 					disabled={submitted}
 					class="grid h-[2.875rem] w-[2.875rem] shrink-0 place-items-center rounded-full text-[1.15rem] font-bold active:scale-95 disabled:opacity-40"
-					style="background: var(--color-surface-2); color: var(--color-accent);"
+					style="background: var(--color-surface-2); color: var(--color-ink-muted);"
 					onclick={insertHashtag}
 				>
 					#
