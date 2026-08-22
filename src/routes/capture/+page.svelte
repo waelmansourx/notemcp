@@ -67,8 +67,16 @@
 	let dismissed = $state(false);
 
 	function focusCaptionAfterIntro() {
+		const el = captionEl;
+		if (!el) return;
+
+		// Native autofocus can land while the share sheet is still animating.
+		// On mobile that often leaves a caret without opening the IME. Reset the
+		// focus once the sheet is fully visible so the keyboard sees a fresh
+		// focus transition instead of an already-focused field.
+		el.blur();
 		requestAnimationFrame(() => {
-			captionEl?.focus({ preventScroll: true });
+			el.focus({ preventScroll: true });
 		});
 	}
 
@@ -271,10 +279,12 @@
 					/>
 				{/if}
 
+				<!-- svelte-ignore a11y_autofocus (capture opens ready to type) -->
 				<textarea
 					bind:this={captionEl}
 					bind:value={caption}
 					placeholder="Add a thought…"
+					autofocus
 					inputmode="text"
 					rows="2"
 					class="mb-3 w-full resize-none bg-transparent font-serif text-[1.18rem] leading-[1.5] tracking-[-0.017em] outline-none"
@@ -428,7 +438,7 @@
 					aria-label="Add a tag"
 					disabled={submitted}
 					class="grid h-[2.875rem] w-[4.3125rem] shrink-0 place-items-center rounded-full text-[1.15rem] font-bold active:scale-95 disabled:opacity-40"
-					style="background: var(--color-accent-soft); color: var(--color-accent);"
+					style="background: var(--color-surface-2); color: var(--color-ink-muted);"
 					onclick={insertHashtag}
 				>
 					#
