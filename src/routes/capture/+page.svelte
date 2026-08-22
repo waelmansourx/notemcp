@@ -29,20 +29,8 @@
 	const sourceUrl = foundUrl || null;
 	const leftoverText = rawText.replace(urlRegex, '').trim();
 
-	// Best-effort link preview — fetched in the background and never blocks
-	// saving. If it resolves before the user taps something, it replaces the
-	// raw shared text with the page's real title.
 	const link = new LinkPreview({ url: sourceUrl });
-
-	// Shared screenshots/photos, pulled out of Cache Storage where the
-	// service worker stashed it (see src/service-worker.ts) and uploaded to
-	// R2 in the background (see ADR-001). sharedImageDataUrl is a local
-	// preview only — never written into the saved note, which instead gets
-	// the stable /api/media/{id} ref as soon as the (fast) signing request
-	// resolves. If sharing happens with genuinely no connection, that
-	// request never resolves either, and the note saves as text-only rather
-	// than embedding the raw bytes.
-	const sharedImages = new ImageAttachments({ onPrepared: () => captionEl?.focus() });
+	const sharedImages = new ImageAttachments();
 	let sharedImageLoading = $state(sharedIds.length > 0);
 	let sharedImageInput = $state<HTMLInputElement | null>(null);
 
@@ -61,33 +49,8 @@
 	let displayTitle = $derived(link.title || fallbackTitle);
 	let displaySubtext = $derived(link.description || fallbackSubtext);
 
-	// If you were already adding to a thread when you shared this, the share
-	// lands there too — collecting four links into one place is the whole
-	// point. It's never silent: the chip below the preview says where this is
-	// going and gets you out of it in one tap.
 	onMount(restore);
 
-	// Focus the caption the instant the sheet mounts rather than waiting on
-	// its entrance transition — the sheet is already visible enough to type
-	// into well before it finishes sliding up. The native `autofocus` on the
-	// field gives the browser the same intent before this component hydrates;
-	// the onintroend re-focus below stays as a backstop for Android, where a
-	// caret that appears mid-slide sometimes doesn't bring the IME with it.
-	onMount(() => {
-		captionEl?.focus();
-	});
-
-	// Sharing from another app is a capture surface in its own right, not a
-	// fallback for the in-app composer — so it gets the same row of your own
-	// tags instead of five hard-coded ones. Like the composer, it no longer
-	// offers a thread to file under before you've written anything: the chip
-	// below only shows a thread you already chose from the note itself.
-	// Your own tags first, topped up from the defaults so the grid is always
-	// full — five plus the editor card fills the 3×2 grid.
-	// Read from the local cache rather than `page.data`: the layout streams the
-	// row now, and the share sheet is the one surface that can't afford to wait
-	// for it — you're here for two seconds, and the tags have to be there on
-	// the first frame or you may as well not have them.
 	let recentTags = $derived(suggestions.recent);
 	let quickTags = $derived.by(() => {
 		const names: string[] = [];
@@ -99,11 +62,15 @@
 
 	let caption = $state('');
 	let captionEl = $state<HTMLTextAreaElement | null>(null);
-
 	let submitted = $state(false);
-	/** Which button is showing its checkmark: a tag name, or 'inbox'. */
 	let savedTag = $state<string | null>(null);
 	let dismissed = $state(false);
+
+	function focusCaptionAfterIntro() {
+		requestAnimationFrame(() => {
+			captionEl?.focus({ preventScroll: true });
+		});
+	}
 
 	onMount(() => {
 		if (sourceUrl) link.fetch(sourceUrl);
@@ -175,9 +142,6 @@
 		await sharedImages.waitForIds();
 	}
 
-	// Hide the capture surface immediately. Navigation and network cleanup can
-	// finish after the UI has already responded to the tap, instead of making
-	// a successful local save feel blocked by route loading.
 	async function leave(sending?: Promise<unknown>) {
 		dismissed = true;
 		const navigation = Promise.race([
@@ -189,10 +153,6 @@
 		window.close();
 	}
 
-	// Inserts "#" at the caret rather than opening a picker — same move as
-	// typing a hashtag into a caption on TikTok. save() below pulls it (and
-	// whatever name gets typed after it) back out of the caption text, so
-	// this needs no state of its own.
 	async function insertHashtag() {
 		if (submitted) return;
 		const el = captionEl;
@@ -211,17 +171,9 @@
 		if (submitted) return;
 		submitted = true;
 		savedTag = key;
-
-		// A tag tap here can easily beat the signing round trip (there's no
-		// typing pause like the in-app composer has), so wait for it — never
-		// for the full upload, just the fast id-issuing step.
 		await finishImageStarts();
 
-		// Whatever's typed inline (see insertHashtag) joins whatever tag button
-		// was tapped, if any — the two aren't alternatives, they're the same
-		// "what's this about" answer said two different ways.
 		const allTags = [...tagNames, ...extractHashtags(caption)];
-
 		const entry = queueNote({
 			title: displayTitle,
 			content_markdown: buildContent(),
@@ -235,8 +187,6 @@
 		});
 		touch();
 
-		// The note is durable in localStorage the moment queueNote() returns,
-		// and the server keys on client_id so a retry cannot duplicate it.
 		addPending(entry);
 		const uploadsFinished = sharedImages.waitForUploads();
 		leave(
@@ -282,7 +232,7 @@
 				? 'background: var(--color-surface); --fade-to: var(--color-surface); box-shadow: inset 0 0 0 3px var(--color-accent), 0 -8px 34px rgba(0,0,0,.16); padding-bottom: calc(0.75rem + env(safe-area-inset-bottom));'
 				: 'background: var(--color-surface); --fade-to: var(--color-surface); box-shadow: 0 -8px 34px rgba(0,0,0,.16); padding-bottom: calc(0.75rem + env(safe-area-inset-bottom));'}
 			transition:fly={{ y: 420, duration: 320, easing: quintOut }}
-			onintroend={() => captionEl?.focus()}
+			onintroend={focusCaptionAfterIntro}
 			onclick={(e) => e.stopPropagation()}
 			onpaste={onSharedImagePaste}
 			ondragover={onSharedImageDragOver}
@@ -321,12 +271,10 @@
 					/>
 				{/if}
 
-				<!-- svelte-ignore a11y_autofocus (a capture-only route should open ready to type) -->
 				<textarea
 					bind:this={captionEl}
 					bind:value={caption}
 					placeholder="Add a thought…"
-					autofocus
 					inputmode="text"
 					rows="2"
 					class="mb-3 w-full resize-none bg-transparent font-serif text-[1.18rem] leading-[1.5] tracking-[-0.017em] outline-none"
@@ -364,8 +312,6 @@
 				</div>
 			{/if}
 
-			<!-- Five one-tap tag destinations plus the editor, restored as a
-			     compact 3×2 card grid. -->
 			<div class="mb-2.5 grid shrink-0 grid-cols-3 gap-2.5">
 				{#each quickTags as tag (tag)}
 					<button
@@ -425,7 +371,6 @@
 			</div>
 
 			<div class="flex shrink-0 items-center gap-2">
-				<!-- Cancel is deliberately the far-left action, away from Save. -->
 				<button
 					type="button"
 					aria-label="Cancel"
@@ -482,8 +427,8 @@
 					type="button"
 					aria-label="Add a tag"
 					disabled={submitted}
-					class="grid h-[2.875rem] w-[2.875rem] shrink-0 place-items-center rounded-full text-[1.15rem] font-bold active:scale-95 disabled:opacity-40"
-					style="background: var(--color-surface-2); color: var(--color-ink-muted);"
+					class="grid h-[2.875rem] w-[4.3125rem] shrink-0 place-items-center rounded-full text-[1.15rem] font-bold active:scale-95 disabled:opacity-40"
+					style="background: var(--color-accent-soft); color: var(--color-accent);"
 					onclick={insertHashtag}
 				>
 					#
