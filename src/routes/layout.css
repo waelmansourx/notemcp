@@ -79,8 +79,17 @@ button {
 	touch-action: manipulation;
 }
 
-input {
+input,
+textarea {
 	outline: none;
+}
+
+input:focus,
+input:focus-visible,
+textarea:focus,
+textarea:focus-visible {
+	outline: none;
+	box-shadow: none;
 }
 
 textarea {
@@ -212,8 +221,7 @@ div[style*='box-shadow: 0 10px 26px rgba(20,80,58,.26)'] {
 
 a[href]:focus-visible,
 button:not(:disabled):focus-visible,
-[role='button']:focus-visible,
-textarea:focus-visible {
+[role='button']:focus-visible {
 	outline: 2px solid color-mix(in srgb, var(--color-accent) 58%, transparent);
 	outline-offset: 3px;
 }
@@ -230,6 +238,6 @@ textarea:focus-visible {
 	}
 
 	.navigation-interstitial__spinner {
-		animation: none;
+		animation: none !important;
 	}
 }
