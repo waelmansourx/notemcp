@@ -55,6 +55,43 @@ function extractMeta(html: string, attr: 'property' | 'name', key: string): stri
 
 const EMPTY = { title: null, description: null, image: null };
 
+function isTikTokHost(hostname: string): boolean {
+	const host = hostname.toLowerCase();
+	return host === 'tiktok.com' || host.endsWith('.tiktok.com');
+}
+
+async function fetchTikTokPreview(target: string, signal: AbortSignal) {
+	try {
+		const endpoint = `https://www.tiktok.com/oembed?url=${encodeURIComponent(target)}`;
+		const res = await fetch(endpoint, {
+			signal,
+			headers: {
+				'user-agent': 'Mozilla/5.0 (compatible; NoteMCPBot/1.0)',
+				accept: 'application/json'
+			}
+		});
+		if (!res.ok) return null;
+
+		const data = (await res.json()) as {
+			title?: string;
+			author_name?: string;
+			thumbnail_url?: string;
+		};
+		const title = data.title?.trim() || null;
+		const author = data.author_name?.trim() || null;
+		const image = data.thumbnail_url?.trim() || null;
+		if (!title && !image) return null;
+
+		return {
+			title,
+			description: author ? `TikTok by ${author}` : null,
+			image
+		};
+	} catch {
+		return null;
+	}
+}
+
 export const GET: RequestHandler = async ({ url }) => {
 	const target = url.searchParams.get('url');
 	if (!target) throw error(400, 'Missing url');
@@ -80,6 +117,11 @@ export const GET: RequestHandler = async ({ url }) => {
 	const timeout = setTimeout(() => controller.abort(), 4500);
 
 	try {
+		if (isTikTokHost(parsed.hostname)) {
+			const tiktok = await fetchTikTokPreview(parsed.toString(), controller.signal);
+			if (tiktok) return json(tiktok);
+		}
+
 		const res = await fetch(parsed.toString(), {
 			signal: controller.signal,
 			headers: {
